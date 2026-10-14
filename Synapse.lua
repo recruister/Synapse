@@ -3,10 +3,19 @@
 -- ============================================================
 
 -- ═══════════════════════════════════════════════════════════
--- 1. ЗАГРУЗКА AIRFLOW (с кэшем)
+-- AIRFLOW LOADER (безопасный патч)
+-- ═══════════════════════════════════════════════════════════
+
+if delfile then
+    pcall(delfile, "Synapse/Airflow_patched.luau")
+    pcall(delfile, "Synapse/Airflow.luau")
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- 1. ЗАГРУЗКА AIRFLOW
 -- ═══════════════════════════════════════════════════════════
 local Airflow
-local URL = "https://raw.githubusercontent.com/PookiePepelsss/Airflow-UI/refs/heads/main/Source.luau"
+local URL = "https://raw.githubusercontent.com/recruister/AFUFS/refs/heads/main/Source.lua"
 
 if isfile and isfile("Synapse/Airflow.luau") and readfile then
     local ok, cached = pcall(readfile, "Synapse/Airflow.luau")
@@ -50,7 +59,7 @@ end
 -- ═══════════════════════════════════════════════════════════
 local Window = Airflow:Window({
     Name = "Synapse",
-    Subtitle = "v1.0",
+    Subtitle = "v1.1",
     Keybind = Enum.KeyCode.RightShift,
     Size = UDim2.fromOffset(640, 480),
     Theme = "Default",
@@ -167,6 +176,7 @@ end)
 
 ExploitsTab:Slider({
     Name = "Speed Boost",
+	Flag = "SpeedBoostValue",
     Min = 0, Max = 100, Default = 0, Step = 1, Suffix = "",
     Callback = function(value)
         SpeedValue = value
@@ -285,6 +295,7 @@ end)
 NoclipToggle = ExploitsTab:Toggle({
     Name = "Noclip",
     Desc = "Проход сквозь стены",
+	Flag = "Noclip",
     Default = false,
     Callback = function(value)
         SetNoclip(value, true)
@@ -438,6 +449,7 @@ end)
 -- ═══ Allow Jump ═══
 AllowJumpToggle = ExploitsTab:Toggle({
     Name = "Allow Jump",
+	Flag = "AllowJump",
     Desc = "Разрешить прыжки (выкл — прыгать нельзя, садиться можно)",
     Default = false,
     Callback = function(value)
@@ -466,6 +478,7 @@ AllowJumpToggle = ExploitsTab:Toggle({
 InfinityJumpToggle = ExploitsTab:Toggle({
     Name = "Infinity Jump",
     Desc = "Прыжки в воздухе (нужен Allow Jump)",
+	Flag = "InfinityJump",
     Default = false,
     Callback = function(value)
         InfinityJumpEnabled = value
@@ -729,6 +742,7 @@ local FOVForceConn = nil
 
 VisualsTab:Slider({
     Name = "FOV",
+	Flag = "FOV",
     Min = 70,
     Max = 120,
     Default = OriginalFOV,
@@ -802,6 +816,7 @@ end
 
 VisualsTab:Toggle({
     Name = "FullBright",
+	Flag = "FullBright",
     Desc = "Полное освещение",
     Default = false,
     Callback = function(value)
@@ -1184,6 +1199,7 @@ VisualsTab:Section({Name = "Screen"})
 VisualsTab:Toggle({
     Name = "KeyBinds List",
     Desc = "Показывает список биндов на экране",
+	Flag = "KeybindList",
     Default = false,
     Callback = function(value)
         KeybindListEnabled = value
@@ -1207,6 +1223,7 @@ VisualsTab:Section({Name = "ESP"})
 -- Toggle
 VisualsTab:Toggle({
     Name = "Door ESP",
+	Flag = "DoorESP",
     Desc = "Подсвечивает Двери",
     Default = false,
     Callback = function(value)
@@ -1531,6 +1548,7 @@ end
 -- Toggle
 VisualsTab:Toggle({
     Name = "Key/Pass ESP",
+    Flag = "KeyESP",
     Desc = "Подсвечивает Keycard и PasswordPaper",
     Default = false,
     Callback = function(value)
@@ -1549,6 +1567,182 @@ RegisterCleanup("KeyESP", function()
     KeyESP_Enabled = false
     StopKeyESP()
     ClearAllKeyESP()
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- LOCKER ESP (v2 — только Highlight, только настоящие шкафы)
+-- ═══════════════════════════════════════════════════════════
+local LockerESP_Enabled = false
+local LockerESP_Color = Color3.fromRGB(255, 180, 60)
+local LockerESP_Objects = {}
+local LockerESP_Conn = nil
+
+-- ═══ Только "Locker" (без ItemLocker, SmallCabinet, LockerShelf) ═══
+local function IsRealLocker(name)
+    local n = name:lower()
+    -- Точное имя "locker"
+    if n == "locker" then return true end
+    return false
+end
+
+local function CreateLockerESP(container)
+    if LockerESP_Objects[container] then return end
+
+    local container_ui = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+
+    -- ═══ Только Highlight на модель ═══
+    local hl = Instance.new("Highlight")
+    hl.Name = "NL_LockerESP"
+    hl.Adornee = container
+    hl.FillColor = LockerESP_Color
+    hl.FillTransparency = 0.5
+    hl.OutlineColor = LockerESP_Color
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = container_ui
+
+    -- ═══ Billboard над шкафом ═══
+    -- Ищем центр по bounding box модели
+    local cf, sz
+    local ok, bcf, bsz = pcall(function() return container:GetBoundingBox() end)
+    if ok and bcf and bsz then
+        cf, sz = bcf, bsz
+    else
+        -- Fallback: от первой части
+        for _, d in ipairs(container:GetDescendants()) do
+            if d:IsA("BasePart") or d:IsA("MeshPart") then
+                cf = d.CFrame
+                sz = d.Size
+                break
+            end
+        end
+    end
+
+    if not cf then
+        pcall(function() hl:Destroy() end)
+        return
+    end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "NL_LockerESP_Billboard"
+    bb.Adornee = container
+    bb.Size = UDim2.new(0, 160, 0, 22)
+    bb.StudsOffsetWorldSpace = Vector3.new(0, (sz and sz.Y/2 or 3) + 1, 0)
+    bb.AlwaysOnTop = true
+    bb.MaxDistance = 500
+    bb.LightInfluence = 0
+    bb.Parent = container_ui
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "Locker [0]"
+    lbl.TextColor3 = LockerESP_Color
+    lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.TextSize = 14
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Parent = bb
+
+    LockerESP_Objects[container] = {
+        Highlight = hl,
+        Billboard = bb,
+        Label = lbl,
+        AnchorPos = cf.Position,
+    }
+end
+
+local function RemoveLockerESP(container)
+    local data = LockerESP_Objects[container]
+    if not data then return end
+    pcall(function() if data.Highlight then data.Highlight:Destroy() end end)
+    pcall(function() if data.Billboard then data.Billboard:Destroy() end end)
+    LockerESP_Objects[container] = nil
+end
+
+local function ClearAllLockerESP()
+    for c in pairs(LockerESP_Objects) do RemoveLockerESP(c) end
+    LockerESP_Objects = {}
+    pcall(function()
+        local roots = {LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui")}
+        for _, root in ipairs(roots) do
+            if root then
+                for _, obj in ipairs(root:GetDescendants()) do
+                    local n = obj.Name
+                    if n == "NL_LockerESP_Billboard" or n == "NL_LockerESP" then
+                        obj:Destroy()
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function ScanLockers()
+    if not LockerESP_Enabled then return end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and IsRealLocker(obj.Name) then
+            if not LockerESP_Objects[obj] then
+                CreateLockerESP(obj)
+            end
+        end
+    end
+end
+
+local function UpdateLockerTexts()
+    if not LockerESP_Enabled then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local myPos = hrp.Position
+    for c, data in pairs(LockerESP_Objects) do
+        if not c.Parent then RemoveLockerESP(c) continue end
+        if data.AnchorPos and data.Label then
+            local dist = math.floor((myPos - data.AnchorPos).Magnitude)
+            local newText = "Locker [" .. dist .. "]"
+            if data.Label.Text ~= newText then data.Label.Text = newText end
+        end
+    end
+end
+
+local function StartLockerESP()
+    ScanLockers()
+    LockerESP_Conn = workspace.DescendantAdded:Connect(function(obj)
+        if not LockerESP_Enabled then return end
+        if obj:IsA("Model") and IsRealLocker(obj.Name) then
+            task.wait(0.1)
+            if not LockerESP_Objects[obj] then
+                CreateLockerESP(obj)
+            end
+        end
+    end)
+end
+
+local function StopLockerESP()
+    if LockerESP_Conn then LockerESP_Conn:Disconnect() LockerESP_Conn = nil end
+end
+
+VisualsTab:Toggle({
+    Name = "Locker ESP",
+	Flag = "LockerESP",
+    Desc = "Подсвечивает настоящие шкафчики",
+    Default = false,
+    Callback = function(value)
+        LockerESP_Enabled = value
+        if value then StartLockerESP() else StopLockerESP() ClearAllLockerESP() end
+    end,
+})
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if LockerESP_Enabled then UpdateLockerTexts() end
+    end
+end)
+
+RegisterCleanup("LockerESP", function()
+    LockerESP_Enabled = false
+    StopLockerESP()
+    ClearAllLockerESP()
 end)
 
 -- ═══════════════════════════════════════════════════════════
@@ -1618,12 +1812,25 @@ RegisterESP("KeyESP", "Key/Pass ESP", function(color)
     end
 end)
 
+-- ═══ Регистрируем Locker ESP ═══
+RegisterESP("LockerESP", "Locker ESP", function(color)
+    LockerESP_Color = color
+    for _, data in pairs(LockerESP_Objects) do
+        pcall(function()
+            data.Highlight.FillColor = color
+            data.Highlight.OutlineColor = color
+        end)
+        pcall(function() data.Label.TextColor3 = color end)
+    end
+end)
+
 -- ═══ UI ═══
 local ESPListDropdown = nil
 
 -- 1) ColorPicker "Color"
 VisualsTab:ColorPicker({
     Name = "Color",
+	Flag = "ESPColor",
     Default = GlobalColor,
     Callback = function(color)
         if typeof(color) ~= "Color3" then
@@ -1677,6 +1884,7 @@ end
 
 ESPListDropdown = VisualsTab:Dropdown({
     Name = "Apply to",
+	Flag = "ESPApplyTo",
     Desc = "",
     Options = GetMergedOptions(),
     Default = {GLOBAL_OPT},
@@ -1844,6 +2052,306 @@ SettingsTab:Button({
 })
 
 -- ═══════════════════════════════════════════════════════════
+-- CONFIGS
+-- ═══════════════════════════════════════════════════════════
+SettingsTab:Section({Name = "Configs"})
+
+local HttpService = game:GetService("HttpService")
+local AUTOLOAD_FILE = "Synapse/autoload.txt"
+local EXTRA_SUFFIX = "_extra.json"
+
+local function GetExtraPath(name)
+    return "AirflowUI/" .. name .. EXTRA_SUFFIX
+end
+
+local function EnsureFolder(path)
+    if not makefolder or not isfolder then return end
+    local current = ""
+    for part in string.gmatch(path, "[^/]+") do
+        current = (current == "" and part) or (current .. "/" .. part)
+        if not isfolder(current) then pcall(makefolder, current) end
+    end
+end
+
+-- ═══ Сбор всего extra состояния ═══
+local function CollectExtra()
+    local data = {}
+    data.MenuKeybind = (Window.Keybind and Window.Keybind.Name) or nil
+    data.KeybindListEnabled = KeybindListEnabled
+    data.ESPColorGlobal = ESPColorGlobal
+    data.ESPColorActive = ESPColorActive
+    data.GlobalColor = {GlobalColor.R, GlobalColor.G, GlobalColor.B}
+    data.DoorESP_Color = {DoorESP_Color.R, DoorESP_Color.G, DoorESP_Color.B}
+    data.KeyESP_Color = {KeyESP_Color.R, KeyESP_Color.G, KeyESP_Color.B}
+    data.LockerESP_Color = {LockerESP_Color.R, LockerESP_Color.G, LockerESP_Color.B}
+    data.SpeedValue = SpeedValue
+    data.SpeedEnabled = SpeedEnabled
+    
+    -- Keybinds: клавиши + состояние
+    data.Keybinds = {}
+    data.KeybindStates = {}
+    if KeybindRegistry then
+        for id, kb in pairs(KeybindRegistry) do
+            if kb.Key then data.Keybinds[id] = kb.Key.Name end
+            data.KeybindStates[id] = kb.State or false
+        end
+    end
+    return data
+end
+
+local function ApplyExtra(data)
+    if type(data) ~= "table" then return end
+    
+    -- Menu keybind
+    if data.MenuKeybind then
+        local kc = Enum.KeyCode[data.MenuKeybind]
+        if kc and Window.SetKeybind then
+            pcall(function() Window:SetKeybind(kc) end)
+        end
+    end
+    
+    -- Keybind list
+    if data.KeybindListEnabled ~= nil then
+        KeybindListEnabled = data.KeybindListEnabled
+        if KeybindListEnabled then
+            if CreateKeybindGui then pcall(CreateKeybindGui) end
+            if RefreshKeybindList then pcall(RefreshKeybindList) end
+        else
+            if DestroyKeybindGui then pcall(DestroyKeybindGui) end
+        end
+    end
+    
+    -- ═══ Восстанавливаем per-ESP цвета ДО применения ═══
+    if data.GlobalColor then
+        GlobalColor = Color3.new(data.GlobalColor[1], data.GlobalColor[2], data.GlobalColor[3])
+    end
+    if data.DoorESP_Color then
+        DoorESP_Color = Color3.new(data.DoorESP_Color[1], data.DoorESP_Color[2], data.DoorESP_Color[3])
+    end
+    if data.KeyESP_Color then
+        KeyESP_Color = Color3.new(data.KeyESP_Color[1], data.KeyESP_Color[2], data.KeyESP_Color[3])
+    end
+    if data.LockerESP_Color then
+        LockerESP_Color = Color3.new(data.LockerESP_Color[1], data.LockerESP_Color[2], data.LockerESP_Color[3])
+    end
+    
+    -- ESP mode
+    if data.ESPColorGlobal ~= nil then ESPColorGlobal = data.ESPColorGlobal end
+    if data.ESPColorActive then
+        for k, v in pairs(data.ESPColorActive) do ESPColorActive[k] = v end
+    end
+    
+    -- ═══ Применяем КАЖДЫЙ цвет ОТДЕЛЬНО, не через ApplyColorByMode ═══
+    if ApplyColorToESP then
+        pcall(ApplyColorToESP, "DoorESP", DoorESP_Color)
+        pcall(ApplyColorToESP, "KeyESP", KeyESP_Color)
+        pcall(ApplyColorToESP, "LockerESP", LockerESP_Color)
+    end
+    
+    -- Keybinds (клавиши)
+    if data.Keybinds and KeybindRegistry then
+        for id, keyName in pairs(data.Keybinds) do
+            local kc = Enum.KeyCode[keyName]
+            if kc and KeybindRegistry[id] then
+                KeybindRegistry[id].Key = kc
+            end
+        end
+    end
+    
+    -- ═══ Keybind states + вызываем callback ═══
+    if data.KeybindStates and KeybindRegistry then
+        for id, state in pairs(data.KeybindStates) do
+            local kb = KeybindRegistry[id]
+            if kb then
+                kb.State = state
+                if kb.Callback then
+                    pcall(kb.Callback, state)
+                end
+            end
+        end
+    end
+    
+    if RefreshKeybindList then pcall(RefreshKeybindList) end
+    
+    -- Speed (без вызова callback — чтобы не запускать бинд)
+    if data.SpeedValue ~= nil then SpeedValue = data.SpeedValue end
+    if data.SpeedEnabled ~= nil then SpeedEnabled = data.SpeedEnabled end
+end
+
+-- ═══ Сохранение ═══
+local function SaveExtra(name)
+    if not writefile then return end
+    EnsureFolder("AirflowUI")
+    local data = CollectExtra()
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(data) end)
+    if ok then pcall(writefile, GetExtraPath(name), encoded) end
+end
+
+-- ═══ Загрузка ═══
+local function LoadExtra(name)
+    if not (readfile and isfile) then return end
+    local path = GetExtraPath(name)
+    if not isfile(path) then return end
+    local ok, content = pcall(readfile, path)
+    if not ok or not content then return end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(content) end)
+    if ok2 then ApplyExtra(data) end
+end
+
+-- ═══ AutoLoad helpers ═══
+local function GetAutoLoadConfig()
+    if not (isfile and readfile and isfile(AUTOLOAD_FILE)) then return nil end
+    local ok, name = pcall(readfile, AUTOLOAD_FILE)
+    if ok and name and #name > 0 then return name:gsub("%s+$", "") end
+    return nil
+end
+local function SetAutoLoadConfig(name)
+    if not writefile then return end
+    if not isfolder("Synapse") and makefolder then makefolder("Synapse") end
+    pcall(writefile, AUTOLOAD_FILE, name or "")
+end
+local function ClearAutoLoadConfig()
+    if delfile and isfile and isfile(AUTOLOAD_FILE) then pcall(delfile, AUTOLOAD_FILE) end
+end
+
+-- ═══ UI ═══
+local ConfigNameInput = SettingsTab:Input({
+    Name = "Config Name",
+    Placeholder = "my_config",
+    Default = "",
+})
+
+local ConfigListDropdown = SettingsTab:Dropdown({
+    Name = "Saved Configs",
+    Options = Window:ListConfigs(),
+    Default = nil,
+    Callback = function(value)
+        if value then
+            pcall(function() ConfigNameInput:Set(value, true) end)
+        end
+    end,
+})
+
+local function RefreshConfigList()
+    pcall(function() ConfigListDropdown:Refresh(Window:ListConfigs(), true) end)
+end
+
+SettingsTab:Button({
+    Name = "Save Config",
+    Desc = "Сохранить ВСЁ (тоглы, цвета, бинды)",
+    Icon = "lucide:save",
+    Style = "Primary",
+    Callback = function()
+        local name = ConfigNameInput:Get()
+        if not name or #name == 0 then
+            Window:Notify({Title = "Config", Content = "Введи имя", Type = "Warning", Duration = 3})
+            return
+        end
+        local ok, err = Window:SaveConfig(name)
+        SaveExtra(name)  -- ← сохраняем extra
+        if ok then
+            RefreshConfigList()
+            Window:Notify({Title = "Config", Content = "Сохранён: " .. name, Type = "Success", Duration = 3})
+        else
+            Window:Notify({Title = "Config", Content = "Ошибка: " .. tostring(err), Type = "Error", Duration = 4})
+        end
+    end,
+})
+
+SettingsTab:Button({
+    Name = "Load Config",
+    Desc = "Загрузить ВСЁ",
+    Icon = "lucide:folder-open",
+    Callback = function()
+        local name = ConfigNameInput:Get()
+        if not name or #name == 0 then
+            Window:Notify({Title = "Config", Content = "Выбери конфиг", Type = "Warning", Duration = 3})
+            return
+        end
+        local ok, err = Window:LoadConfig(name)
+        LoadExtra(name)  -- ← загружаем extra
+        if ok then
+            Window:Notify({Title = "Config", Content = "Загружен: " .. name, Type = "Success", Duration = 3})
+        else
+            Window:Notify({Title = "Config", Content = "Ошибка: " .. tostring(err), Type = "Error", Duration = 4})
+        end
+    end,
+})
+
+SettingsTab:Button({
+    Name = "Delete Config",
+    Desc = "Удалить конфиг",
+    Icon = "lucide:trash-2",
+    Style = "Danger",
+    Callback = function()
+        local name = ConfigNameInput:Get()
+        if not name or #name == 0 then
+            Window:Notify({Title = "Config", Content = "Выбери конфиг", Type = "Warning", Duration = 3})
+            return
+        end
+        Window:Confirm({
+            Title = "Delete Config",
+            Content = "Удалить '" .. name .. "'?",
+            ConfirmText = "Удалить",
+            Callback = function()
+                local ok = Window:DeleteConfig(name)
+                -- удаляем extra файл
+                if delfile and isfile and isfile(GetExtraPath(name)) then
+                    pcall(delfile, GetExtraPath(name))
+                end
+                if ok then
+                    RefreshConfigList()
+                    if GetAutoLoadConfig() == name then ClearAutoLoadConfig() end
+                    Window:Notify({Title = "Config", Content = "Удалён: " .. name, Type = "Success", Duration = 3})
+                end
+            end,
+        })
+    end,
+})
+
+SettingsTab:Toggle({
+    Name = "Auto Save",
+    Desc = "Автосохранение",
+    Default = false,
+    Callback = function(value) Window:SetAutoSave(value) end,
+})
+
+local AutoLoadToggle = SettingsTab:Toggle({
+    Name = "Auto Load",
+    Desc = "Загружать при старте",
+    Default = GetAutoLoadConfig() ~= nil,
+    Callback = function(value)
+        if value then
+            local name = ConfigNameInput:Get()
+            if not name or #name == 0 then
+                Window:Notify({Title = "Auto Load", Content = "Введи имя", Type = "Warning", Duration = 3})
+                task.spawn(function() task.wait(0.05)
+                    pcall(function() AutoLoadToggle:Set(false) end)
+                    pcall(function() AutoLoadToggle:SetValue(false) end)
+                end)
+                return
+            end
+            local configs = Window:ListConfigs()
+            local exists = false
+            for _, c in ipairs(configs) do if c == name then exists = true break end end
+            if not exists then
+                Window:Notify({Title = "Auto Load", Content = "Не найден: " .. name, Type = "Warning", Duration = 3})
+                task.spawn(function() task.wait(0.05)
+                    pcall(function() AutoLoadToggle:Set(false) end)
+                    pcall(function() AutoLoadToggle:SetValue(false) end)
+                end)
+                return
+            end
+            SetAutoLoadConfig(name)
+            Window:Notify({Title = "Auto Load", Content = "При старте: " .. name, Type = "Success", Duration = 3})
+        else
+            ClearAutoLoadConfig()
+            Window:Notify({Title = "Auto Load", Content = "Отключён", Type = "Info", Duration = 3})
+        end
+    end,
+})
+
+-- ═══════════════════════════════════════════════════════════
 -- 9. УВЕДОМЛЕНИЕ
 -- ═══════════════════════════════════════════════════════════
 task.spawn(function()
@@ -1909,10 +2417,41 @@ _G.UpdateRebindDesc = function(id)
     local keyName = GetKeyName(id)
     if id == "SpeedBoost" and RebindBtns.Speed then
         pcall(function() RebindBtns.Speed:SetDesc("Клавиша: " .. keyName) end)
+        lastRebindDesc.Speed = keyName
     elseif id == "Noclip" and RebindBtns.Noclip then
         pcall(function() RebindBtns.Noclip:SetDesc("Клавиша: " .. keyName) end)
+        lastRebindDesc.Noclip = keyName
     end
 end
+
+-- ═══ Polling: обновляем Desc у Rebind-кнопок ═══
+local lastRebindDesc = {}
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.SynapseUnloaded then break end
+        if not KeybindRegistry then continue end
+        
+        -- SpeedBoost
+        local kb = KeybindRegistry["SpeedBoost"]
+        if kb and RebindBtns.Speed then
+            local currentKey = kb.Key and kb.Key.Name or "?"
+            if lastRebindDesc.Speed ~= currentKey then
+                lastRebindDesc.Speed = currentKey
+                pcall(function() RebindBtns.Speed:SetDesc("Клавиша: " .. currentKey) end)
+            end
+        end
+        
+        -- Noclip
+        kb = KeybindRegistry["Noclip"]
+        if kb and RebindBtns.Noclip then
+            local currentKey = kb.Key and kb.Key.Name or "?"
+            if lastRebindDesc.Noclip ~= currentKey then
+                lastRebindDesc.Noclip = currentKey
+                pcall(function() RebindBtns.Noclip:SetDesc("Клавиша: " .. currentKey) end)
+            end
+        end
+    end
+end)
 
 -- ═══ Polling: синхронизация keybind list с флагами ═══
 _G.SynapseUnloaded = false
@@ -1933,6 +2472,117 @@ task.spawn(function()
             if changed then pcall(RefreshKeybindList) end
         end
     end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- AUTO LOAD AT STARTUP
+-- ═══════════════════════════════════════════════════════════
+task.spawn(function()
+    task.wait(1.5)
+    local HttpService = game:GetService("HttpService")
+    local AUTOLOAD_FILE = "Synapse/autoload.txt"
+    if not (isfile and readfile and isfile(AUTOLOAD_FILE)) then return end
+
+    local ok, name = pcall(readfile, AUTOLOAD_FILE)
+    if not ok or not name then return end
+    name = name:gsub("%s+$", "")
+    if #name == 0 then return end
+
+    local configs = Window:ListConfigs()
+    local exists = false
+    for _, c in ipairs(configs) do if c == name then exists = true break end end
+
+    if not exists then
+        warn("[AutoLoad] Конфиг '" .. name .. "' не найден")
+        if delfile then pcall(delfile, AUTOLOAD_FILE) end
+        return
+    end
+
+    local success, err = Window:LoadConfig(name)
+    if not success then
+        warn("[AutoLoad] Ошибка: " .. tostring(err))
+        return
+    end
+
+    -- ═══ Загружаем extra ═══
+    local extraPath = "AirflowUI/" .. name .. "_extra.json"
+    if isfile and isfile(extraPath) and readfile then
+        local ok2, content = pcall(readfile, extraPath)
+        if ok2 and content then
+            local ok3, data = pcall(function() return HttpService:JSONDecode(content) end)
+            if ok3 and type(data) == "table" then
+                -- Menu keybind
+                if data.MenuKeybind then
+                    local kc = Enum.KeyCode[data.MenuKeybind]
+                    if kc and Window.SetKeybind then
+                        pcall(function() Window:SetKeybind(kc) end)
+                    end
+                end
+                -- Keybind list
+                if data.KeybindListEnabled ~= nil then
+                    KeybindListEnabled = data.KeybindListEnabled
+                    if KeybindListEnabled and CreateKeybindGui then pcall(CreateKeybindGui) end
+                end
+                -- Colors: восстанавливаем перед применением
+                if data.GlobalColor then
+                    GlobalColor = Color3.new(data.GlobalColor[1], data.GlobalColor[2], data.GlobalColor[3])
+                end
+                if data.DoorESP_Color then
+                    DoorESP_Color = Color3.new(data.DoorESP_Color[1], data.DoorESP_Color[2], data.DoorESP_Color[3])
+                end
+                if data.KeyESP_Color then
+                    KeyESP_Color = Color3.new(data.KeyESP_Color[1], data.KeyESP_Color[2], data.KeyESP_Color[3])
+                end
+                if data.LockerESP_Color then
+                    LockerESP_Color = Color3.new(data.LockerESP_Color[1], data.LockerESP_Color[2], data.LockerESP_Color[3])
+                end
+                if data.ESPColorGlobal ~= nil then ESPColorGlobal = data.ESPColorGlobal end
+                if data.ESPColorActive then
+                    for k, v in pairs(data.ESPColorActive) do ESPColorActive[k] = v end
+                end
+                
+                -- ═══ Применяем per-ESP цвета ОТДЕЛЬНО ═══
+                if ApplyColorToESP then
+                    pcall(ApplyColorToESP, "DoorESP", DoorESP_Color)
+                    pcall(ApplyColorToESP, "KeyESP", KeyESP_Color)
+                    pcall(ApplyColorToESP, "LockerESP", LockerESP_Color)
+                end
+                
+                -- Keybinds: клавиши
+                if data.Keybinds and KeybindRegistry then
+                    for id, keyName in pairs(data.Keybinds) do
+                        local kc = Enum.KeyCode[keyName]
+                        if kc and KeybindRegistry[id] then
+                            KeybindRegistry[id].Key = kc
+                        end
+                    end
+                end
+                -- Keybind states + callback
+                if data.KeybindStates and KeybindRegistry then
+                    for id, state in pairs(data.KeybindStates) do
+                        local kb = KeybindRegistry[id]
+                        if kb then
+                            kb.State = state
+                            if kb.Callback then pcall(kb.Callback, state) end
+                        end
+                    end
+                end
+                if RefreshKeybindList then pcall(RefreshKeybindList) end
+            end
+        end
+    end
+
+    print("[AutoLoad] Загружен: " .. name)
+    
+    -- ═══ Обновляем Desc у Rebind-кнопок ═══
+    if _G.UpdateRebindDesc then
+        pcall(_G.UpdateRebindDesc, "SpeedBoost")
+        pcall(_G.UpdateRebindDesc, "Noclip")
+    end
+    
+    pcall(function()
+        Window:Notify({Title = "Auto Load", Content = "Загружен: " .. name, Type = "Success", Duration = 4})
+    end)
 end)
 
 print("FROV")
