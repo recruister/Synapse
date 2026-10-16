@@ -1,6 +1,3 @@
--- ============================================================
--- SYNAPSE v1.0 — AIRFLOW UI + CLEANUP REGISTRY
--- ============================================================
 
 -- ═══════════════════════════════════════════════════════════
 -- AIRFLOW LOADER (безопасный патч)
@@ -43,6 +40,8 @@ local function RegisterCleanup(name, fn)
     table.insert(CleanupRegistry, {Name = name, Fn = fn})
 end
 
+	
+
 local function RunAllCleanups()
     print("[Synapse] Cleanup start, functions: " .. #CleanupRegistry)
     for _, entry in ipairs(CleanupRegistry) do
@@ -59,7 +58,7 @@ end
 -- ═══════════════════════════════════════════════════════════
 local Window = Airflow:Window({
     Name = "Synapse",
-    Subtitle = "v1.1",
+    Subtitle = "v1.2",
     Keybind = Enum.KeyCode.RightShift,
     Size = UDim2.fromOffset(640, 480),
     Theme = "Default",
@@ -492,21 +491,269 @@ InfinityJumpToggle = ExploitsTab:Toggle({
 RegisterCleanup("JumpFeatures", function()
     AllowJumpEnabled = false
     InfinityJumpEnabled = false
+    SitGuard = false
     if JumpConn then JumpConn:Disconnect() JumpConn = nil end
     if SitBlockConn then SitBlockConn:Disconnect() SitBlockConn = nil end
     if SitHeartbeatConn then SitHeartbeatConn:Disconnect() SitHeartbeatConn = nil end
     if SitChangedConn then SitChangedConn:Disconnect() SitChangedConn = nil end
     if SeatedConn then SeatedConn:Disconnect() SeatedConn = nil end
+    -- Сбрасываем toggle в UI
+    if AllowJumpToggle then
+        pcall(function() AllowJumpToggle:Set(false) end)
+        pcall(function() AllowJumpToggle:SetValue(false) end)
+    end
+    if InfinityJumpToggle then
+        pcall(function() InfinityJumpToggle:Set(false) end)
+        pcall(function() InfinityJumpToggle:SetValue(false) end)
+    end
+    -- Восстанавливаем Humanoid
     local char = LocalPlayer.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
-            pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-                hum:SetStateEnabled(Enum.HumanoidStateType.Seated, true)
-            end)
+            -- НЕ трогаем Jumping — Pressure сам управляет
+            -- Только снимаем Sit если был
+            if hum.Sit then hum.Sit = false end
         end
     end
+end)
+
+-- ═══════════════════════════════════════════════════════════
+-- EXPLOITS → AUTOMATION
+-- ═══════════════════════════════════════════════════════════
+ExploitsTab:Section({Name = "Automation"})
+
+local AutoCodeEnter_Enabled = false
+local AutoCodeEnter_Conn = nil
+local LastEnteredCode = nil
+local LastEnteredDoor = nil
+
+-- ═══ Кэш кодов: door → code (чтобы не читать каждый раз) ═══
+local DoorCodeCache = {}
+
+-- ═══ Читаем код с бумаги ═══
+local function ExtractPaperCode(paper)
+    if not paper then return nil end
+    -- Ищем Code.SurfaceGui.TextLabel
+    local code = paper:FindFirstChild("Code", true)
+    if code then
+        local sg = code:FindFirstChildWhichIsA("SurfaceGui", true)
+        if sg then
+            local lbl = sg:FindFirstChildWhichIsA("TextLabel", true)
+            if lbl and lbl.Text then
+                local t = lbl.Text:match("^%d+$")
+                if t then return t end
+            end
+        end
+    end
+    -- Fallback: любой SurfaceGui с 3-6 цифрами
+    for _, d in ipairs(paper:GetDescendants()) do
+        if d:IsA("SurfaceGui") then
+            local lbl = d:FindFirstChildWhichIsA("TextLabel", true)
+            if lbl and lbl.Text then
+                local t = lbl.Text:match("^%d+$")
+                if t and #t >= 3 and #t <= 6 then return t end
+            end
+        end
+    end
+    return nil
+end
+
+-- ═══ Ищем ближайший code paper ═══
+local function FindNearestPaper(maxDist)
+    maxDist = maxDist or 20
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local myPos = hrp.Position
+
+    local nearest, nearestDist = nil, maxDist
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name:lower():find("passwordpaper") then
+            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+            if pp then
+                local dist = (myPos - pp.Position).Magnitude
+                if dist < nearestDist then
+                    nearestDist = dist
+                    nearest = obj
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+-- ═══ Ищем ближайший Keypad ═══
+local function FindNearestKeypad(maxDist)
+    maxDist = maxDist or 15
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local myPos = hrp.Position
+
+    -- Ищем Lock с детьми Keypad*
+    local nearest, nearestDist = nil, maxDist
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj.Name == "Lock" then
+            local kp = obj:FindFirstChild("Keypad1")
+            if kp then
+                local pp = kp:FindFirstChildWhichIsA("BasePart", true)
+                if pp then
+                    local dist = (myPos - pp.Position).Magnitude
+                    if dist < nearestDist then
+                        nearestDist = dist
+                        nearest = obj
+                    end
+                end
+            end
+        end
+    end
+    return nearest, nearestDist
+end
+
+-- ═══ Клик по кнопке Keypad через ClickDetector ═══
+local function ClickKeypad(keypadPart)
+    if not keypadPart then return false end
+    local cd = keypadPart:FindFirstChildWhichIsA("ClickDetector", true)
+    if cd then
+        pcall(function() fireclickdetector(cd) end)
+        return true
+    end
+    return false
+end
+
+-- ═══ Получить часть кнопки по цифре ═══
+local function GetKeypadPart(lock, digit)
+    if not lock then return nil end
+    local name = "Keypad" .. tostring(digit)
+    return lock:FindFirstChild(name, true)
+end
+
+local function GetBackspacePart(lock)
+    if not lock then return nil end
+    return lock:FindFirstChild("KeypadBackspace", true)
+end
+
+-- ═══ Ввод кода в Keypad ═══
+local function EnterCodeInKeypad(lock, code)
+    if not lock or not code then return false end
+    print("[AutoCode] Ввожу код:", code)
+
+    -- Разбиваем на цифры
+    local digits = {}
+    for i = 1, #code do
+        table.insert(digits, code:sub(i, i))
+    end
+
+    -- Вводим с задержкой между кнопками
+    task.spawn(function()
+        for _, d in ipairs(digits) do
+            local keypad = GetKeypadPart(lock, d)
+            if keypad then
+                ClickKeypad(keypad)
+                task.wait(0.15)
+            end
+        end
+    end)
+    return true
+end
+
+-- ═══ Основная логика ═══
+local function EnterCodeInKeypad(lock, code)
+    if not lock or not code then 
+        print("[AutoCode] EnterCodeInKeypad: нет lock/code")
+        return false 
+    end
+    print("[AutoCode] EnterCodeInKeypad старт | Lock:", lock:GetFullName(), "| Code:", code)
+
+    local digits = {}
+    for i = 1, #code do
+        table.insert(digits, code:sub(i, i))
+    end
+    print("[AutoCode] Цифры:", table.concat(digits, ","))
+
+    task.spawn(function()
+        for _, d in ipairs(digits) do
+            local keypad = GetKeypadPart(lock, d)
+            print("[AutoCode] Ищу Keypad" .. d .. ":", keypad and keypad:GetFullName() or "НЕ НАЙДЕН")
+            if keypad then
+                local cd = keypad:FindFirstChildWhichIsA("ClickDetector", true)
+                print("[AutoCode] ClickDetector:", cd and cd:GetFullName() or "НЕ НАЙДЕН")
+                local ok, err = pcall(function() fireclickdetector(cd) end)
+                print("[AutoCode] fireclickdetector:", ok, err or "")
+                task.wait(0.15)
+            end
+        end
+    end)
+    return true
+end
+
+local function TryAutoCode()
+    if not AutoCodeEnter_Enabled then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+
+    local lock, dist = FindNearestKeypad(15)
+    print("[AutoCode] Ближайший Lock:", lock and lock:GetFullName() or "НЕТ", "| dist:", dist and math.floor(dist) or "?")
+    if not lock then return end
+    if dist > 12 then 
+        print("[AutoCode] Слишком далеко:", math.floor(dist))
+        return 
+    end
+
+    if LastEnteredDoor == lock and LastEnteredCode then
+        return
+    end
+
+    local paper = FindNearestPaper(30)
+    print("[AutoCode] Бумага:", paper and paper:GetFullName() or "НЕТ")
+    if not paper then return end
+
+    local code = ExtractPaperCode(paper)
+    print("[AutoCode] Код с бумаги:", code or "НЕ НАЙДЕН")
+    if not code then return end
+
+    LastEnteredDoor = lock
+    LastEnteredCode = code
+
+    EnterCodeInKeypad(lock, code)
+
+    pcall(function()
+        Window:Notify({
+            Title = "AutoCodeEnter",
+            Content = "Введён код: " .. code,
+            Type = "Success",
+            Duration = 3,
+        })
+    end)
+end
+
+AutoCodeEnter_Conn = RunService.Heartbeat:Connect(function()
+    if not AutoCodeEnter_Enabled then return end
+    pcall(TryAutoCode)
+end)
+
+ExploitsTab:Toggle({
+    Name = "AutoCodeEnter",
+    Desc = "Автоматически вводит код с бумаги в закрытую дверь",
+    Default = false,
+    Flag = "AutoCodeEnter",   -- для сохранения в конфиг
+    Callback = function(value)
+        AutoCodeEnter_Enabled = value
+        if not value then
+            -- Сброс кэша при выключении
+            LastEnteredCode = nil
+            LastEnteredDoor = nil
+        end
+    end,
+})
+
+RegisterCleanup("AutoCodeEnter", function()
+    AutoCodeEnter_Enabled = false
+    if AutoCodeEnter_Conn then AutoCodeEnter_Conn:Disconnect() AutoCodeEnter_Conn = nil end
+    LastEnteredCode = nil
+    LastEnteredDoor = nil
 end)
 
 local VisualsTab  = Window:Tab({Name = "Visuals"})
@@ -1746,6 +1993,197 @@ RegisterCleanup("LockerESP", function()
 end)
 
 -- ═══════════════════════════════════════════════════════════
+-- LEVER ESP (только Highlight)
+-- ═══════════════════════════════════════════════════════════
+local LeverESP_Enabled = false
+local LeverESP_Color = Color3.fromRGB(255, 80, 80)
+local LeverESP_Objects = {}
+local LeverESP_Conn = nil
+
+-- ═══ Имена рычагов в Pressure ═══
+local LEVER_KEYWORDS = {"lever", "switch", "valve", "button"}
+-- ═══ Игнор — что НЕ рычаг ═══
+local LEVER_IGNORE = {"light", "lamp", "bulb", "sign"}
+
+local function MatchesLever(name)
+    local n = name:lower()
+    for _, kw in ipairs(LEVER_IGNORE) do
+        if n:find(kw, 1, true) then return false end
+    end
+    for _, kw in ipairs(LEVER_KEYWORDS) do
+        if n:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+-- ═══ Модель должна иметь ProximityPrompt (иначе это декорация) ═══
+local function HasPrompt(model)
+    for _, d in ipairs(model:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then return true end
+    end
+    return false
+end
+
+local function CreateLeverESP(container)
+    if LeverESP_Objects[container] then return end
+
+    local container_ui = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+
+    -- ═══ Highlight ═══
+    local hl = Instance.new("Highlight")
+    hl.Name = "NL_LeverESP"
+    hl.Adornee = container
+    hl.FillColor = LeverESP_Color
+    hl.FillTransparency = 0.5
+    hl.OutlineColor = LeverESP_Color
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = container_ui
+
+    -- ═══ Bounding box ═══
+    local cf, sz
+    local ok, bcf, bsz = pcall(function() return container:GetBoundingBox() end)
+    if ok and bcf and bsz then
+        cf, sz = bcf, bsz
+    else
+        for _, d in ipairs(container:GetDescendants()) do
+            if d:IsA("BasePart") or d:IsA("MeshPart") then
+                cf = d.CFrame
+                sz = d.Size
+                break
+            end
+        end
+    end
+
+    if not cf then
+        pcall(function() hl:Destroy() end)
+        return
+    end
+
+    -- ═══ Billboard ═══
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "NL_LeverESP_Billboard"
+    bb.Adornee = container
+    bb.Size = UDim2.new(0, 140, 0, 22)
+    bb.StudsOffsetWorldSpace = Vector3.new(0, (sz and sz.Y/2 or 2) + 1, 0)
+    bb.AlwaysOnTop = true
+    bb.MaxDistance = 500
+    bb.LightInfluence = 0
+    bb.Parent = container_ui
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "Lever [0]"
+    lbl.TextColor3 = LeverESP_Color
+    lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.TextSize = 14
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Parent = bb
+
+    LeverESP_Objects[container] = {
+        Highlight = hl,
+        Billboard = bb,
+        Label = lbl,
+        AnchorPos = cf.Position,
+    }
+end
+
+local function RemoveLeverESP(container)
+    local data = LeverESP_Objects[container]
+    if not data then return end
+    pcall(function() if data.Highlight then data.Highlight:Destroy() end end)
+    pcall(function() if data.Billboard then data.Billboard:Destroy() end end)
+    LeverESP_Objects[container] = nil
+end
+
+local function ClearAllLeverESP()
+    for c in pairs(LeverESP_Objects) do RemoveLeverESP(c) end
+    LeverESP_Objects = {}
+    pcall(function()
+        local roots = {LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui")}
+        for _, root in ipairs(roots) do
+            if root then
+                for _, obj in ipairs(root:GetDescendants()) do
+                    local n = obj.Name
+                    if n == "NL_LeverESP_Billboard" or n == "NL_LeverESP" then
+                        obj:Destroy()
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function ScanLevers()
+    if not LeverESP_Enabled then return end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and MatchesLever(obj.Name) and HasPrompt(obj) then
+            if not LeverESP_Objects[obj] then
+                CreateLeverESP(obj)
+            end
+        end
+    end
+end
+
+local function UpdateLeverTexts()
+    if not LeverESP_Enabled then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local myPos = hrp.Position
+    for c, data in pairs(LeverESP_Objects) do
+        if not c.Parent then RemoveLeverESP(c) continue end
+        if data.AnchorPos and data.Label then
+            local dist = math.floor((myPos - data.AnchorPos).Magnitude)
+            local newText = "Lever [" .. dist .. "]"
+            if data.Label.Text ~= newText then data.Label.Text = newText end
+        end
+    end
+end
+
+local function StartLeverESP()
+    ScanLevers()
+    LeverESP_Conn = workspace.DescendantAdded:Connect(function(obj)
+        if not LeverESP_Enabled then return end
+        if obj:IsA("Model") and MatchesLever(obj.Name) then
+            task.wait(0.1)
+            if HasPrompt(obj) and not LeverESP_Objects[obj] then
+                CreateLeverESP(obj)
+            end
+        end
+    end)
+end
+
+local function StopLeverESP()
+    if LeverESP_Conn then LeverESP_Conn:Disconnect() LeverESP_Conn = nil end
+end
+
+VisualsTab:Toggle({
+    Name = "Lever ESP",
+    Desc = "Подсвечивает рычаги и кнопки",
+    Default = false,
+    Flag = "LeverESP",
+    Callback = function(value)
+        LeverESP_Enabled = value
+        if value then StartLeverESP() else StopLeverESP() ClearAllLeverESP() end
+    end,
+})
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if LeverESP_Enabled then UpdateLeverTexts() end
+    end
+end)
+
+RegisterCleanup("LeverESP", function()
+    LeverESP_Enabled = false
+    StopLeverESP()
+    ClearAllLeverESP()
+end)
+
+-- ═══════════════════════════════════════════════════════════
 -- ESP COLOR SYSTEM (Global / Local)
 -- ═══════════════════════════════════════════════════════════
 local ESPRegistry = {}          -- key → {Name, ApplyColor}
@@ -1816,6 +2254,18 @@ end)
 RegisterESP("LockerESP", "Locker ESP", function(color)
     LockerESP_Color = color
     for _, data in pairs(LockerESP_Objects) do
+        pcall(function()
+            data.Highlight.FillColor = color
+            data.Highlight.OutlineColor = color
+        end)
+        pcall(function() data.Label.TextColor3 = color end)
+    end
+end)
+
+-- ═══ Регистрируем Lever ESP ═══
+RegisterESP("LeverESP", "Lever ESP", function(color)
+    LeverESP_Color = color
+    for _, data in pairs(LeverESP_Objects) do
         pcall(function()
             data.Highlight.FillColor = color
             data.Highlight.OutlineColor = color
@@ -2001,54 +2451,77 @@ SettingsTab:Button({
     Desc = "Выгрузить скрипт (все функции + UI)",
     Icon = "lucide:power",
     Style = "Danger",
-    Callback = function()
-	    _G.SynapseUnloaded = true
-        print("[Synapse] === UNLOAD START ===")
-        
-        -- 1. Запускаем cleanup registry
-        pcall(RunAllCleanups)
-        
-        -- 2. Сбрасываем мышь
-        pcall(function()
-            if _G.NL_MouseUnlockConn then
-                _G.NL_MouseUnlockConn:Disconnect()
-                _G.NL_MouseUnlockConn = nil
+Callback = function()
+    _G.SynapseUnloaded = true
+    print("[Synapse] === UNLOAD START ===")
+    
+    -- ═══ ФОРС-СБРОС JUMP (до всего) ═══
+    AllowJumpEnabled = false
+    InfinityJumpEnabled = false
+    SitGuard = false
+    if JumpConn then JumpConn:Disconnect() JumpConn = nil end
+    if SitBlockConn then SitBlockConn:Disconnect() SitBlockConn = nil end
+    if SitHeartbeatConn then SitHeartbeatConn:Disconnect() SitHeartbeatConn = nil end
+    if SitChangedConn then SitChangedConn:Disconnect() SitChangedConn = nil end
+    if SeatedConn then SeatedConn:Disconnect() SeatedConn = nil end
+    
+    -- ═══ Снимаем только наш Sit, НЕ трогаем Jumping ═══
+    pcall(function()
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            if hum.Sit then hum.Sit = false end
+            -- НЕ восстанавливаем Jumping / Seated — Pressure сам
+        end
+    end)
+    
+    -- ═══ Останавливаем polling keybind list ═══
+    _G.SynapseUnloaded = true
+    
+    -- ═══ Обычный cleanup ═══
+    pcall(RunAllCleanups)
+    
+    -- ═══ Сбрасываем мышь ═══
+    pcall(function()
+        if _G.NL_MouseUnlockConn then
+            _G.NL_MouseUnlockConn:Disconnect()
+            _G.NL_MouseUnlockConn = nil
+        end
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+        UserInputService.MouseIconEnabled = false
+    end)
+    
+    -- ═══ Сбрасываем камеру ═══
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+            cam.CameraType = Enum.CameraType.Custom
+            if LocalPlayer.Character then
+                local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+                if hum then cam.CameraSubject = hum end
             end
-            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-            UserInputService.MouseIconEnabled = false
-        end)
-        
-        -- 3. Сбрасываем камеру
-        pcall(function()
-            local cam = workspace.CurrentCamera
-            if cam then
-                cam.CameraType = Enum.CameraType.Custom
-                if LocalPlayer.Character then
-                    local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-                    if hum then cam.CameraSubject = hum end
-                end
+        end
+    end)
+    
+    -- ═══ Уничтожаем UI ═══
+    pcall(function()
+        if Window and Window.Destroy then
+            Window:Destroy()
+        end
+    end)
+    
+    -- ═══ Финальная очистка ═══
+    pcall(function()
+        local root = gethui and gethui() or game:GetService("CoreGui")
+        for _, gui in ipairs(root:GetChildren()) do
+            if gui:IsA("ScreenGui") and (gui.Name == "AirflowUI" or gui.Name == "Synapse") then
+                gui:Destroy()
             end
-        end)
-        
-        -- 4. Уничтожаем UI
-        pcall(function()
-            if Window and Window.Destroy then
-                Window:Destroy()
-            end
-        end)
-        
-        -- 5. Финальная очистка CoreGui (на всякий случай)
-        pcall(function()
-            local root = gethui and gethui() or game:GetService("CoreGui")
-            for _, gui in ipairs(root:GetChildren()) do
-                if gui:IsA("ScreenGui") and (gui.Name == "AirflowUI" or gui.Name == "Synapse") then
-                    gui:Destroy()
-                end
-            end
-        end)
-        
-        print("[Synapse] === UNLOAD COMPLETE ===")
-    end
+        end
+    end)
+    
+    print("[Synapse] === UNLOAD COMPLETE ===")
+end
 })
 
 -- ═══════════════════════════════════════════════════════════
