@@ -1,3 +1,7 @@
+	-- ============================================================
+	-- SYNAPSE v1.0 — AIRFLOW UI + CLEANUP REGISTRY
+	-- ============================================================
+
 	-- ═══════════════════════════════════════════════════════════
 	-- AIRFLOW LOADER (безопасный патч)
 	-- ═══════════════════════════════════════════════════════════
@@ -17,6 +21,7 @@
 		local ok, cached = pcall(readfile, "Synapse/Airflow.luau")
 		if ok and cached and #cached > 1000 then
 			Airflow = loadstring(cached)()
+			--print("[Airflow] Загружен из кэша")
 		end
 	end
 	if not Airflow then
@@ -26,6 +31,7 @@
 			pcall(writefile, "Synapse/Airflow.luau", src)
 		end
 		Airflow = loadstring(src)()
+		--print("[Airflow] Загружен с GitHub")
 	end
 
 	-- ═══════════════════════════════════════════════════════════
@@ -40,12 +46,14 @@
 		
 
 	local function RunAllCleanups()
+		--print("[Synapse] Cleanup start, functions: " .. #CleanupRegistry)
 		for _, entry in ipairs(CleanupRegistry) do
 			local ok, err = pcall(entry.Fn)
 			if not ok then
 				warn("[Synapse] Cleanup error for " .. entry.Name .. ": " .. tostring(err))
 			end
 		end
+		--print("[Synapse] Cleanup complete")
 	end
 
 	-- ═══════════════════════════════════════════════════════════
@@ -53,7 +61,7 @@
 	-- ═══════════════════════════════════════════════════════════
 	local Window = Airflow:Window({
 		Name = "Synapse",
-		Subtitle = "v1.3",
+		Subtitle = "v1.4",
 		Keybind = Enum.KeyCode.RightShift,
 		Size = UDim2.fromOffset(640, 480),
 		Theme = "Default",
@@ -168,6 +176,7 @@
 	SwimmingModule = FindSwimming()
 	if SwimmingModule then
 		OriginalSwimSpeed = SwimmingModule.SwimmingSpeed or 18
+		----print("[Speed] Swimming | OriginalSwimSpeed:", OriginalSwimSpeed)
 	end
 
 	-- ═══ Основной цикл ═══
@@ -608,6 +617,7 @@ task.spawn(function()
                 if tick() - LastSafeTime > 0.2 then
                     hrp.CFrame = CFrame.new(LastSafePos + Vector3.new(0, 3, 0))
                     hrp.AssemblyLinearVelocity = Vector3.zero
+                    --print("[Bypass Void] ⚡ Телепорт | velY:", math.floor(velY))
                 end
             end
         end
@@ -623,6 +633,7 @@ end)
 	-- EXPLOITS → AUTOMATION
 	-- ═══════════════════════════════════════════════════════════
 	ExploitsTab:Section({Name = "Automation"})
+	--print("[AutoCode] Блок AUTOMATION загружен")
 
 	local AutoCodeEnter_Enabled = false
 	local LastEnteredDoor = nil
@@ -721,6 +732,7 @@ end)
 	end
 
 local function EnterCode(lock, code)
+    --print("[AutoCode] Ввод:", code)
 
     -- ═══ Находим UseKeypad ═══
     local uk = nil
@@ -732,6 +744,7 @@ local function EnterCode(lock, code)
         end
     end
     if not uk then 
+        --print("[AutoCode] ❌ UseKeypad не найден")
         return 
     end
 
@@ -789,7 +802,8 @@ local function EnterCode(lock, code)
         cam.CameraSubject = oldSubject
         cam.CFrame = oldCFrame
     end)
-	
+
+    --print("[AutoCode] ✅ Готово:", code)
 end
 
 task.spawn(function()
@@ -824,6 +838,7 @@ end)
 		Default = false,
 		Flag = "AutoCodeEnter",
 		Callback = function(value)
+			--print("[AutoCode] Toggle:", value)
 			AutoCodeEnter_Enabled = value
 			if not value then LastEnteredDoor = nil end
 		end,
@@ -834,18 +849,24 @@ end)
 		LastEnteredDoor = nil
 	end)
 	
-	-- ═══════════════════════════════════════════════════════════
--- AutoPipePuzzle (v4 — с наведением камеры)
 -- ═══════════════════════════════════════════════════════════
+-- AutoPipePuzzle v14 (Строгий DFS, фикс дистанции и выключения)
+-- ═══════════════════════════════════════════════════════════
+ExploitsTab:Section({Name = "Automation"})
+
 local AutoPipe_Enabled = false
 local AutoPipe_Conn = nil
 local AutoPipe_LastRun = 0
 local AutoPipe_Running = false
-local AutoPipe_SavedCam = nil
+local AutoPipe_Marker = nil
+local AutoPipe_Pipes = nil
 
 local GREEN_COLOR = Color3.fromRGB(0, 167, 97)
 local COLOR_TOL = 0.08
-local ROTATE_DELAY = 0.3   -- prompt требует времени
+local ROTATE_DELAY = 0.2
+local MARKER_RADIUS = 10 -- Увеличил маркер
+
+local RunService = game:GetService("RunService")
 
 local function IsGreenPipe(model)
     if not model then return false end
@@ -874,78 +895,14 @@ local function FindPuzzle()
     return nil
 end
 
--- ═══ Получить экранные координаты части ═══
-local function GetScreenPosition(part)
-    local cam = workspace.CurrentCamera
-    if not cam then return nil end
-    
-    local screenPoint, onScreen = cam:WorldToViewportPoint(part.Position)
-    if not onScreen then return nil end
-    return Vector2.new(screenPoint.X, screenPoint.Y)
-end
-
--- ═══ Наведение камеры на трубу ═══
-local function LookAtPipe(model)
-    local cam = workspace.CurrentCamera
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not cam or not hrp then return false end
-
-    local hl = model:FindFirstChild("Highlight")
-    if not hl or not hl:IsA("BasePart") then return false end
-
-    -- Scriptable камера
-    cam.CameraType = Enum.CameraType.Scriptable
-    
-    -- Позиция глаз
-    local eyePos = hrp.Position + Vector3.new(0, 1.5, 0)
-    cam.CFrame = CFrame.lookAt(eyePos, hl.Position)
-    return true
-end
-
--- ═══ Поворот через симуляцию клика мыши ═══
-local VIM = game:GetService("VirtualInputManager")
-
-local function RotatePipe(model)
-    -- 1. Наводим камеру
-    LookAtPipe(model)
-    task.wait(0.1)  -- ждём что prompt активировался
-    
-    -- 2. Получаем экранную позицию keypad
-    local hl = model:FindFirstChild("Highlight")
-    if not hl then return false end
-    
-    local screenPos = GetScreenPosition(hl)
-    if not screenPos then return false end
-    
-    -- 3. Симулируем клик мыши на этой позиции
-    VIM:SendMousePosition(screenPos)
-    task.wait(0.02)
-    VIM:SendMouseButtonEvent(screenPos.X, screenPos.Y, 0, true, game, 1)
-    task.wait(0.05)
-    VIM:SendMouseButtonEvent(screenPos.X, screenPos.Y, 0, false, game, 1)
-    
-    return true
-end
-
--- ═══ Восстановление камеры ═══
-local function RestoreCamera(savedCFrame)
-    local cam = workspace.CurrentCamera
-    if cam then
-        cam.CameraType = Enum.CameraType.Custom
-        if savedCFrame then
-            cam.CFrame = savedCFrame
-        end
-    end
-end
-
 local function GetPipePos(model)
     local hl = model:FindFirstChild("Highlight")
     if hl then return hl.Position end
     return nil
 end
 
-local function GetNeighbors(pipe, allPipes, step)
+-- ═══ Универсальный поиск соседей ═══
+local function GetNeighbors(pipe, allPipes)
     local myPos = GetPipePos(pipe)
     if not myPos then return {} end
     local neighbors = {}
@@ -953,9 +910,19 @@ local function GetNeighbors(pipe, allPipes, step)
         if other ~= pipe then
             local otherPos = GetPipePos(other)
             if otherPos then
-                local d = (myPos - otherPos).Magnitude
-                if d <= step * 1.6 then
-                    table.insert(neighbors, other)
+                local d = myPos - otherPos
+                local dist = d.Magnitude
+                -- Ищем в радиусе 2.5 studs и проверяем, что это сосед по оси
+                if dist > 0.5 and dist < 2.5 then
+                    local dx, dy, dz = math.abs(d.X), math.abs(d.Y), math.abs(d.Z)
+                    local smallDiffs = 0
+                    if dx < 0.5 then smallDiffs = smallDiffs + 1 end
+                    if dy < 0.5 then smallDiffs = smallDiffs + 1 end
+                    if dz < 0.5 then smallDiffs = smallDiffs + 1 end
+                    
+                    if smallDiffs >= 2 then
+                        table.insert(neighbors, other)
+                    end
                 end
             end
         end
@@ -963,7 +930,152 @@ local function GetNeighbors(pipe, allPipes, step)
     return neighbors
 end
 
-local function SolvePuzzle(pf)
+local function CreateMarker(position)
+    if AutoPipe_Marker then AutoPipe_Marker:Destroy() end
+    local marker = Instance.new("Part")
+    marker.Name = "NL_PipePuzzleMarker"
+    marker.Shape = Enum.PartType.Cylinder
+    marker.Size = Vector3.new(0.3, MARKER_RADIUS * 2, MARKER_RADIUS * 2)
+    marker.CFrame = CFrame.new(position) * CFrame.Angles(0, math.rad(90), 0)
+    marker.Color = Color3.fromRGB(255, 140, 0)
+    marker.Material = Enum.Material.Neon
+    marker.Transparency = 0.5
+    marker.Anchored = true
+    marker.CanCollide = false
+    marker.CanQuery = false
+    marker.CanTouch = false
+    marker.Parent = workspace
+    AutoPipe_Marker = marker
+end
+
+local function IsPlayerAtMarker()
+    if not AutoPipe_Marker then return false end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local dx = hrp.Position.X - AutoPipe_Marker.Position.X
+    local dz = hrp.Position.Z - AutoPipe_Marker.Position.Z
+    return math.sqrt(dx*dx + dz*dz) < MARKER_RADIUS + 2
+end
+
+-- ═══ Поворот с проверкой выключения ═══
+local function RotatePipeSafe(model)
+    if not AutoPipe_Enabled then return false end -- Мгновенный выход
+    
+    local hl = model:FindFirstChild("Highlight")
+    if not hl then return false end
+    local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if not prompt then return false end
+    
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    -- Ограничение 15 studs (вместо стандартных 7)
+    if (hrp.Position - hl.Position).Magnitude > 15 then
+        return false
+    end
+    
+    local beforeZ = hl.Orientation.Z
+    local ok = pcall(function() fireproximityprompt(prompt) end)
+    if not ok then return false end
+    task.wait(ROTATE_DELAY)
+    
+    return math.abs(beforeZ - hl.Orientation.Z) > 1
+end
+
+-- ═══ Строгий DFS ═══
+local function SolveDFS(currentPipe, allPipes, visited, depth)
+    if not AutoPipe_Enabled then return false end
+    if depth > 50 then return false end
+    
+    if currentPipe.Name == "End" and IsGreenPipe(currentPipe) then return true end
+    
+    visited[currentPipe] = true
+    local neighbors = GetNeighbors(currentPipe, allPipes)
+    
+    -- Шаг 1: Ищем ТОЛЬКО серых соседей
+    local grayNeighbors = {}
+    for _, n in ipairs(neighbors) do
+        if not IsGreenPipe(n) and n.Name ~= "End" and n.Name ~= "First" and not visited[n] then
+            table.insert(grayNeighbors, n)
+        end
+    end
+    
+    for _, neighbor in ipairs(grayNeighbors) do
+        if not AutoPipe_Enabled then return false end
+        
+        -- Крутим соседа 4 раза
+        for rot = 1, 4 do
+            if RotatePipeSafe(neighbor) then
+                if IsGreenPipe(neighbor) then
+                    --print("[DFS] ✅ Подключен:", neighbor.Name, "| Глубина:", depth)
+                    if SolveDFS(neighbor, allPipes, visited, depth + 1) then return true end
+                    break -- Если вглубь не пробились, переходим к следующему соседу
+                end
+            end
+        end
+    end
+    
+    -- Шаг 2: Если все серые тупики - крутим САМУ текущую трубу
+    if currentPipe.Name ~= "First" then
+        --print("[DFS] 🔄 Все серые тупик. Крутим", currentPipe.Name)
+        
+        for rot = 1, 4 do
+            if not AutoPipe_Enabled then return false end
+            
+            if RotatePipeSafe(currentPipe) then
+                if IsGreenPipe(currentPipe) then
+                    -- Ищем новых соседей после поворота
+                    local newNeighbors = GetNeighbors(currentPipe, allPipes)
+                    for _, n in ipairs(newNeighbors) do
+                        if not visited[n] and n.Name ~= "First" then
+                            if IsGreenPipe(n) then
+                                if SolveDFS(n, allPipes, visited, depth + 1) then return true end
+                            elseif n.Name ~= "End" then
+                                for r2 = 1, 4 do
+                                    if RotatePipeSafe(n) then
+                                        if IsGreenPipe(n) then
+                                            if SolveDFS(n, allPipes, visited, depth + 1) then return true end
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    visited[currentPipe] = nil
+    return false
+end
+
+-- ═══ Запуск ═══
+local function SolvePuzzle(pf, pipes)
+    local first = nil
+    for _, p in ipairs(pipes) do
+        if p.Name == "First" then first = p break end
+    end
+    if not first then return end
+
+    --print("[AutoPipe] 🚀 Запуск умного DFS...")
+    local visited = {}
+    local success = SolveDFS(first, pipes, visited, 1)
+
+    if success then
+        --print("[AutoPipe] 🎉 ПАЗЛ РЕШЁН!")
+    else
+        --print("[AutoPipe] ❌ Не удалось собрать.")
+    end
+end
+
+local function SetupPuzzle()
+    local board, pf, room = FindPuzzle()
+    if not pf then return false end
+
     local pipes = {}
     for _, obj in ipairs(pf:GetChildren()) do
         if obj:IsA("Model") and (obj.Name == "Straight" or obj.Name == "Corner" 
@@ -971,121 +1083,73 @@ local function SolvePuzzle(pf)
             table.insert(pipes, obj)
         end
     end
-    if #pipes == 0 then return end
+    if #pipes == 0 then return false end
+    AutoPipe_Pipes = pipes
 
-    -- Шаг сетки
-    local step = 1.2
-    local minDist = math.huge
-    for _, p1 in ipairs(pipes) do
-        for _, p2 in ipairs(pipes) do
-            if p1 ~= p2 then
-                local pos1 = GetPipePos(p1)
-                local pos2 = GetPipePos(p2)
-                if pos1 and pos2 then
-                    local d = (pos1 - pos2).Magnitude
-                    if d > 0.5 and d < minDist then minDist = d end
-                end
-            end
-        end
-    end
-    if minDist < math.huge then step = minDist end
-
-    -- Сохраняем камеру
-    AutoPipe_SavedCam = workspace.CurrentCamera and workspace.CurrentCamera.CFrame
-
-    local greenPipes = {}
+    -- ═══ ФИКС ДИСТАНЦИИ: Увеличиваем радиус активации промптов ═══
     for _, p in ipairs(pipes) do
-        if IsGreenPipe(p) then table.insert(greenPipes, p) end
+        local prompt = p:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then
+            prompt.MaxActivationDistance = 20
+        end
     end
 
-    if #greenPipes == 0 then
-        RestoreCamera(AutoPipe_SavedCam)
-        return
+    local minY = math.huge
+    local sumX, sumZ, count = 0, 0, 0
+    for _, p in ipairs(pipes) do
+        local pos = GetPipePos(p)
+        if pos then
+            if pos.Y < minY then minY = pos.Y end
+            sumX = sumX + pos.X
+            sumZ = sumZ + pos.Z
+            count = count + 1
+        end
     end
+    local centerX = sumX / count
+    local centerZ = sumZ / count
 
-    -- ═══ Крутим зелёные, у которых есть серые соседи ═══
-    for iter = 1, 50 do
-        local progress = false
-        
-        for _, green in ipairs(greenPipes) do
-            if not green.Parent then continue end
-            
-            local neighbors = GetNeighbors(green, pipes, step)
-            local blackNeighbors = 0
-            for _, n in ipairs(neighbors) do
-                if not IsGreenPipe(n) then blackNeighbors = blackNeighbors + 1 end
-            end
-            
-            if blackNeighbors > 0 then
-                RotatePipe(green)
-                task.wait(ROTATE_DELAY)
-                
-                -- Проверяем прогресс
-                local newGreenNeighbors = 0
-                for _, n in ipairs(neighbors) do
-                    if IsGreenPipe(n) then newGreenNeighbors = newGreenNeighbors + 1 end
-                end
-                
-                if newGreenNeighbors > 0 then
-                    progress = true
-                end
-            end
-        end
-        
-        -- Обновляем список зелёных
-        greenPipes = {}
-        for _, p in ipairs(pipes) do
-            if IsGreenPipe(p) then table.insert(greenPipes, p) end
-        end
-        
-        
-        if #greenPipes == #pipes then
-            break
-        end
-        
-        if not progress and iter > 3 then
-            break
-        end
-    end
-    
-    -- Восстанавливаем камеру
-    RestoreCamera(AutoPipe_SavedCam)
+    CreateMarker(Vector3.new(centerX, minY - 3, centerZ))
+    return true
 end
 
 ExploitsTab:Toggle({
     Name = "AutoPipePuzzle",
-    Desc = "Решает пазл с наведением камеры",
-    Default = false,
-    Flag = "AutoPipePuzzle",
+    Desc = "Строгий DFS (крутит соседей, затем себя)",
+    Default = false, Flag = "AutoPipePuzzle",
     Callback = function(value)
+        --print("[AutoPipe] Toggle:", value)
         AutoPipe_Enabled = value
+        if value then 
+            SetupPuzzle() 
+        else 
+            if AutoPipe_Marker then AutoPipe_Marker:Destroy() AutoPipe_Marker = nil end
+            AutoPipe_Pipes = nil
+        end
     end,
 })
 
 AutoPipe_Conn = RunService.Heartbeat:Connect(function()
     if _G.SynapseUnloaded then return end
-    if not AutoPipe_Enabled then return end
-    if AutoPipe_Running then return end
+    if not AutoPipe_Enabled or AutoPipe_Running or not AutoPipe_Pipes then return end
+    if not IsPlayerAtMarker() then return end
     if tick() - AutoPipe_LastRun < 5 then return end
     AutoPipe_LastRun = tick()
     
     AutoPipe_Running = true
     task.spawn(function()
-        local ok, board, pf, room = pcall(FindPuzzle)
-        if ok and pf then
-            pcall(SolvePuzzle, pf)
-        end
+        pcall(function()
+            local pf = AutoPipe_Pipes[1].Parent
+            if pf then SolvePuzzle(pf, AutoPipe_Pipes) end
+        end)
         AutoPipe_Running = false
     end)
 end)
 
 RegisterCleanup("AutoPipePuzzle", function()
     AutoPipe_Enabled = false
+    AutoPipe_Pipes = nil
+    if AutoPipe_Marker then AutoPipe_Marker:Destroy() end
     if AutoPipe_Conn then AutoPipe_Conn:Disconnect() AutoPipe_Conn = nil end
-    -- Возвращаем камеру
-    if AutoPipe_SavedCam and workspace.CurrentCamera then
-        workspace.CurrentCamera.CFrame = AutoPipe_SavedCam
-    end
 end)
 
 	local VisualsTab  = Window:Tab({Name = "Visuals"})
@@ -1413,7 +1477,82 @@ end)
 		FullBrightEnabled = false
 		RestoreLighting()
 	end)
+	
+	
+   do
+   	-- ═══ ЦВЕТА (выносим наверх, чтобы RegisterESP их видел) ═══
+	DoorESP_Color = Color3.fromRGB(220, 60, 60)
+	KeyESP_Color = Color3.fromRGB(80, 200, 255)
+	LockerESP_Color = Color3.fromRGB(255, 180, 60)
+	LeverESP_Color = Color3.fromRGB(255, 80, 80)
+	EntityESP_Color = Color3.fromRGB(255, 50, 50)
+	
+	-- ═══════════════════════════════════════════════════════════
+	-- КАСТОМНЫЕ ТУМБЛЕРЫ С КВАДРАТИКОМ ЦВЕТА
+	-- ═══════════════════════════════════════════════════════════
+	local activePicker = nil
 
+	local function MakeESP(name, desc, defaultColor, flag, colorFlag, toggleCallback, colorCallback)
+		local toggle = VisualsTab:Toggle({
+			Name = name,
+			Desc = desc,
+			Default = false,
+			Flag = flag,
+			Callback = toggleCallback
+		})
+		
+		-- Сдвигаем сам переключатель влево, чтобы освободить место
+		local switch = toggle._frame:FindFirstChildWhichIsA("Frame")
+		if switch then
+			switch.Position = UDim2.new(1, -50, 0.5, 0)
+		end
+		
+		-- Создаем квадратик
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.fromOffset(20, 20)
+		btn.AnchorPoint = Vector2.new(0.5, 0.5) -- ← ВОТ ЭТА СТРОЧКА
+		btn.Position = UDim2.new(1, -26, 0.5, 0)
+		btn.BackgroundColor3 = defaultColor
+		btn.Text = ""
+		btn.AutoButtonColor = false
+		btn.Parent = toggle._frame
+		
+		local corner = Instance.new("UICorner", btn)
+		corner.CornerRadius = UDim.new(0, 4)
+		local stroke = Instance.new("UIStroke", btn)
+		stroke.Color = Color3.fromRGB(60, 60, 60)
+		
+		-- Создаем скрытую палитру, которая будет выезжать при клике
+		local picker = VisualsTab:ColorPicker({
+			Name = name .. " Color",
+			Flag = colorFlag,
+			Default = defaultColor,
+			Callback = function(color)
+				btn.BackgroundColor3 = color
+				if colorCallback then colorCallback(color) end
+			end
+		})
+		
+		-- Изначально прячем палитру
+		if picker._frame then
+			picker._frame.Visible = false
+		end
+		
+		-- Клик по квадратику открывает/закрывает палитру
+		btn.MouseButton1Click:Connect(function()
+			if picker._frame then
+				if activePicker and activePicker ~= picker then
+					activePicker._frame.Visible = false
+				end
+				picker._frame.Visible = not picker._frame.Visible
+				activePicker = picker
+			end
+		end)
+		
+		-- Применяем цвет при загрузке (для конфига)
+		if colorCallback then colorCallback(defaultColor) end
+	end
+	
 	-- ═══════════════════════════════════════════════════════════
 	-- DOOR ESP (v13 — чистая заливка через Box)
 	-- ═══════════════════════════════════════════════════════════
@@ -1735,6 +1874,7 @@ end
 	end
 
 	local function UpdateDoorColors()
+		--print("[DoorESP] UpdateColors | color:", tostring(DoorESP_Color))
 		for _, data in pairs(DoorESP_Objects) do
 			pcall(function()
 				data.Highlight.FillColor = DoorESP_Color
@@ -1801,16 +1941,20 @@ end
 	VisualsTab:Section({Name = "ESP"})
 
 	-- Toggle
-	VisualsTab:Toggle({
-		Name = "Door ESP",
-		Flag = "DoorESP",
-		Desc = "Подсвечивает Двери",
-		Default = false,
-		Callback = function(value)
-			DoorESP_Enabled = value
-			if value then StartDoorESP() else StopDoorESP() ClearAllDoors() end
+	MakeESP("Door ESP", "Подсвечивает Двери", Color3.fromRGB(220, 60, 60), "DoorESP", "DoorESPColor", function(value)
+		DoorESP_Enabled = value
+		if value then StartDoorESP() else StopDoorESP() ClearAllDoors() end
+	end, function(color)
+		DoorESP_Color = color
+		for _, data in pairs(DoorESP_Objects) do
+			if data.Highlights then
+				for _, hl in ipairs(data.Highlights) do
+					pcall(function() hl.FillColor = color hl.OutlineColor = color end)
+				end
+			end
+			pcall(function() if data.Label then data.Label.TextColor3 = color end end)
 		end
-	})
+	end)
 
 	task.spawn(function()
 		while task.wait(0.5) do
@@ -2175,16 +2319,16 @@ end
 	end
 
 	-- Toggle
-	VisualsTab:Toggle({
-		Name = "Key/Pass ESP",
-		Flag = "KeyESP",
-		Desc = "Подсвечивает Ключ и Бумагу с кодом",
-		Default = false,
-		Callback = function(value)
-			KeyESP_Enabled = value
-			if value then StartKeyESP() else StopKeyESP() ClearAllKeyESP() end
+	MakeESP("Key/Pass ESP", "Подсвечивает Ключ и Бумагу", Color3.fromRGB(80, 200, 255), "KeyESP", "KeyESPColor", function(value)
+		KeyESP_Enabled = value
+		if value then StartKeyESP() else StopKeyESP() ClearAllKeyESP() end
+	end, function(color)
+		KeyESP_Color = color
+		for _, data in pairs(KeyESP_Objects) do
+			pcall(function() data.Highlight.FillColor = color data.Highlight.OutlineColor = color end)
+			pcall(function() data.Label.TextColor3 = color end)
 		end
-	})
+	end)
 
 	task.spawn(function()
 		while task.wait(0.5) do
@@ -2373,16 +2517,17 @@ end
 		if LockerESP_Conn then LockerESP_Conn:Disconnect() LockerESP_Conn = nil end
 	end
 
-	VisualsTab:Toggle({
-		Name = "Locker ESP",
-		Flag = "LockerESP",
-		Desc = "Подсвечивает настоящие шкафчики",
-		Default = false,
-		Callback = function(value)
-			LockerESP_Enabled = value
-			if value then StartLockerESP() else StopLockerESP() ClearAllLockerESP() end
-		end,
-	})
+	MakeESP("Locker ESP", "Подсвечивает шкафчики", Color3.fromRGB(255, 180, 60), "LockerESP", "LockerESPColor", function(value)
+		LockerESP_Enabled = value
+		if value then StartLockerESP() else StopLockerESP() ClearAllLockerESP() end
+	end, function(color)
+		LockerESP_Color = color
+		for _, data in pairs(LockerESP_Objects) do
+			pcall(function() data.Highlight.FillColor = color data.Highlight.OutlineColor = color end)
+			pcall(function() if data.HighlightWater then data.HighlightWater.FillColor = color end end)
+			pcall(function() data.Label.TextColor3 = color end)
+		end
+	end)
 
 	task.spawn(function()
 		while task.wait(0.5) do
@@ -2564,16 +2709,16 @@ end
 		if LeverESP_Conn then LeverESP_Conn:Disconnect() LeverESP_Conn = nil end
 	end
 
-	VisualsTab:Toggle({
-		Name = "Lever ESP",
-		Desc = "Подсвечивает рычаги",
-		Default = false,
-		Flag = "LeverESP",
-		Callback = function(value)
-			LeverESP_Enabled = value
-			if value then StartLeverESP() else StopLeverESP() ClearAllLeverESP() end
-		end,
-	})
+	MakeESP("Lever ESP", "Подсвечивает рычаги", Color3.fromRGB(255, 80, 80), "LeverESP", "LeverESPColor", function(value)
+		LeverESP_Enabled = value
+		if value then StartLeverESP() else StopLeverESP() ClearAllLeverESP() end
+	end, function(color)
+		LeverESP_Color = color
+		for _, data in pairs(LeverESP_Objects) do
+			pcall(function() data.Highlight.FillColor = color data.Highlight.OutlineColor = color end)
+			pcall(function() data.Label.TextColor3 = color end)
+		end
+	end)
 
 	task.spawn(function()
 		while task.wait(0.5) do
@@ -2586,266 +2731,240 @@ end
 		StopLeverESP()
 		ClearAllLeverESP()
 	end)
+	
+-- ═══════════════════════════════════════════════════════════
+-- ENTITY ESP v4 (Part + DescendantAdded, 100% рабочая)
+-- ═══════════════════════════════════════════════════════════
+local EntityESP_Enabled = false
+local EntityESP_Color = Color3.fromRGB(255, 50, 50)
+local EntityESP_Objects = {}
+local EntityESP_Conn = nil
 
-	-- ═══════════════════════════════════════════════════════════
-	-- ESP COLOR SYSTEM (Global / Local)
-	-- ═══════════════════════════════════════════════════════════
-	local ESPRegistry = {}          -- key → {Name, ApplyColor}
-	local ESPColorGlobal = true
-	local ESPColorActive = {}       -- key → true/false
-	local GlobalColor = Color3.fromRGB(220, 60, 60)
+local ALL_ENTITIES = {"Angler", "Blitz", "Chainsmoker", "Froger", "Pinkie", "Pandemonium"}
+local SelectedEntities = {}
+for _, name in ipairs(ALL_ENTITIES) do SelectedEntities[name] = true end
 
-	local function RegisterESP(key, displayName, applyColorFn)
-		ESPRegistry[key] = {Name = displayName, ApplyColor = applyColorFn}
-		ESPColorActive[key] = true
-	end
+-- Проверка имени
+local function MatchEntity(name)
+    local n = name:lower()
+    for entityName, isSelected in pairs(SelectedEntities) do
+        if isSelected and n == entityName:lower() then -- ТОЧНОЕ СОВПАДЕНИЕ, как в игре
+            return true, entityName
+        end
+    end
+    return false, nil
+end
 
-	local function ApplyColorToESP(key, color)
-		local e = ESPRegistry[key]
-		if e and e.ApplyColor then pcall(e.ApplyColor, color) end
-	end
+local function CreateEntityESP(container, entityName)
+    if EntityESP_Objects[container] then return end
+    
+    local container_ui = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
 
-	local function ApplyColorByMode(color)
-		if ESPColorGlobal then
-			-- Global ON → все ESP
-			for key, _ in pairs(ESPRegistry) do
-				ApplyColorToESP(key, color)
-			end
-		else
-			-- Global OFF → только выбранные
-			for key, active in pairs(ESPColorActive) do
-				if active then ApplyColorToESP(key, color) end
-			end
-		end
-	end
+    -- ═══ 1. Highlight (для случаев если меши есть — EX15-подобные) ═══
+    local hl = Instance.new("Highlight")
+    hl.Name = "NL_EntityESP"
+    hl.Adornee = container
+    hl.FillColor = EntityESP_Color
+    hl.FillTransparency = 0.85
+    hl.OutlineColor = EntityESP_Color
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Parent = container_ui
 
-	local function GetESPNameList()
-		local list = {}
-		for _, esp in pairs(ESPRegistry) do table.insert(list, esp.Name) end
-		table.sort(list)
-		return list
-	end
+    -- ═══ 2. КРУГ через BillboardGui ═══
+    local bbCircle = Instance.new("BillboardGui")
+    bbCircle.Name = "NL_EntityESP_Circle"
+    bbCircle.Adornee = container
+    bbCircle.Size = UDim2.new(16, 0, 16, 0) -- ← БЫЛО 8, 0, 8, 0 (стало в 2 раза больше)
+    bbCircle.StudsOffsetWorldSpace = Vector3.new(0, 5, 0) -- ← ДОБАВЬ ЭТУ СТРОКУ (поднимает круг на 5 студов вверх)
+    bbCircle.AlwaysOnTop = true
+    bbCircle.MaxDistance = 800
+    bbCircle.LightInfluence = 0
+    bbCircle.Parent = container_ui
 
-	RegisterESP("DoorESP", "Door ESP", function(color)
-		DoorESP_Color = color
-		for _, data in pairs(DoorESP_Objects) do
-			if data.Highlights then
-				for _, hl in ipairs(data.Highlights) do
-					pcall(function()
-						hl.FillColor = color
-						hl.OutlineColor = color
-					end)
-				end
-			end
+    local circle = Instance.new("Frame")
+    circle.Name = "Circle"
+    circle.AnchorPoint = Vector2.new(0.5, 0.5)
+    circle.Position = UDim2.new(0.5, 0, 0.5, 0)
+    circle.Size = UDim2.new(0.8, 0, 0.8, 0)
+    circle.BackgroundColor3 = EntityESP_Color
+    circle.BackgroundTransparency = 0.85
+    circle.BorderSizePixel = 0
+    circle.Parent = bbCircle
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0.5, 0)
+    corner.Parent = circle
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = EntityESP_Color
+    stroke.Thickness = 3
+    stroke.Transparency = 0
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = circle
+
+    -- ═══ 3. Текст ═══
+    local bbText = Instance.new("BillboardGui")
+    bbText.Name = "NL_EntityESP_Billboard"
+    bbText.Adornee = container
+    bbText.Size = UDim2.new(0, 200, 0, 24)
+    bbText.StudsOffsetWorldSpace = Vector3.new(0, 10, 0) -- ← БЫЛО 4, стало 10 (текст над кругом)
+    bbText.AlwaysOnTop = true
+    bbText.MaxDistance = 1000
+    bbText.LightInfluence = 0
+    bbText.Parent = container_ui
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = entityName .. " [0]"
+    lbl.TextColor3 = EntityESP_Color
+    lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+    lbl.TextStrokeTransparency = 0
+    lbl.TextSize = 16
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Parent = bbText
+
+    EntityESP_Objects[container] = {
+        Highlight = hl,
+        Circle = bbCircle,
+        CircleFrame = circle,
+        Stroke = stroke,
+        Billboard = bbText,
+        Label = lbl,
+        Anchor = container,
+        EntityName = entityName,
+    }
+end
+
+local function RemoveEntityESP(container)
+    local data = EntityESP_Objects[container]
+    if not data then return end
+    pcall(function() if data.Highlight then data.Highlight:Destroy() end end)
+    pcall(function() if data.Circle then data.Circle:Destroy() end end)
+    pcall(function() if data.Billboard then data.Billboard:Destroy() end end)
+    EntityESP_Objects[container] = nil
+end
+
+local function ClearAllEntityESP()
+    for c in pairs(EntityESP_Objects) do RemoveEntityESP(c) end
+    EntityESP_Objects = {}
+    pcall(function()
+        local roots = {LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui")}
+        for _, root in ipairs(roots) do
+            if root then
+                for _, obj in ipairs(root:GetDescendants()) do
+                    if obj.Name == "NL_EntityESP_Billboard" or obj.Name == "NL_EntityESP" then obj:Destroy() end
+                end
+            end
+        end
+    end)
+end
+
+-- ═══ Скан (Model или Part) ═══
+local function ScanEntities()
+    if not EntityESP_Enabled then return end
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Model") or obj:IsA("BasePart") then
+            local isSelected, matchedName = MatchEntity(obj.Name)
+            if isSelected then
+                if not EntityESP_Objects[obj] then
+                    CreateEntityESP(obj, matchedName)
+                    --print("[EntityESP] ✅ Найден:", matchedName)
+                end
+            elseif EntityESP_Objects[obj] then
+                RemoveEntityESP(obj)
+            end
+        end
+    end
+end
+
+local function UpdateEntityTexts()
+    if not EntityESP_Enabled then return end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local myPos = hrp.Position
+    
+    for c, data in pairs(EntityESP_Objects) do
+        if not c.Parent then RemoveEntityESP(c) continue end
+        if data.Label then
+            local dist = math.floor((myPos - data.Anchor.Position).Magnitude)
+            local newText = data.EntityName .. " [" .. dist .. "]"
+            if data.Label.Text ~= newText then data.Label.Text = newText end
+        end
+    end
+end
+
+-- ═══ Ловим через DescendantAdded ═══
+local function StartEntityESP()
+    ScanEntities()
+    EntityESP_Conn = workspace.DescendantAdded:Connect(function(obj)
+        if not EntityESP_Enabled then return end
+        if obj:IsA("Model") or obj:IsA("BasePart") then
+            -- Проверяем родителя или самого объекта
+            local isSelected, matchedName = MatchEntity(obj.Name)
+            if isSelected and not EntityESP_Objects[obj] then
+                -- Ждём 0.1 сек чтобы модель/парт прогрузились
+                task.wait(0.1)
+                if obj.Parent then
+                    CreateEntityESP(obj, matchedName)
+                    --print("[EntityESP] 🔥 Заспавнен:", matchedName)
+                end
+            end
+        end
+    end)
+end
+
+local function StopEntityESP()
+    if EntityESP_Conn then EntityESP_Conn:Disconnect() EntityESP_Conn = nil end
+end
+
+-- ═══ ТОГГЛ ═══
+	MakeESP("Entity ESP", "Подсвечивает монстров", Color3.fromRGB(255, 50, 50), "EntityESP", "EntityESPColor", function(value)
+		EntityESP_Enabled = value
+		if value then StartEntityESP() else StopEntityESP() ClearAllEntityESP() end
+	end, function(color)
+		EntityESP_Color = color
+		for _, data in pairs(EntityESP_Objects) do
+			pcall(function() if data.Highlight then data.Highlight.FillColor = color data.Highlight.OutlineColor = color end end)
+			pcall(function() if data.CircleFrame then data.CircleFrame.BackgroundColor3 = color end end)
+			pcall(function() if data.Stroke then data.Stroke.Color = color end end)
 			pcall(function() if data.Label then data.Label.TextColor3 = color end end)
 		end
 	end)
 
-	-- ═══ Регистрируем Key/Pass ESP ═══
-	RegisterESP("KeyESP", "Key/Pass ESP", function(color)
-		KeyESP_Color = color
-		for _, data in pairs(KeyESP_Objects) do
-			pcall(function()
-				data.Highlight.FillColor = color
-				data.Highlight.OutlineColor = color
-			end)
-			pcall(function() data.Label.TextColor3 = color end)
-		end
-	end)
+-- ═══ ФИЛЬТР ═══
+VisualsTab:Dropdown({
+    Name = "Entity Filter",
+    Desc = "Выбери, кого подсвечивать",
+    Options = ALL_ENTITIES,
+    Default = ALL_ENTITIES,
+    Multi = true,
+    Callback = function(selectedList)
+        for name in pairs(SelectedEntities) do SelectedEntities[name] = false end
+        for _, name in ipairs(selectedList) do SelectedEntities[name] = true end
+        if EntityESP_Enabled then ScanEntities() end
+    end
+})
 
-	-- ═══ Регистрируем Locker ESP ═══
-	RegisterESP("LockerESP", "Locker ESP", function(color)
-		LockerESP_Color = color
-		for _, data in pairs(LockerESP_Objects) do
-			pcall(function()
-				data.Highlight.FillColor = color
-				data.Highlight.OutlineColor = color
-			end)
-			pcall(function()
-				if data.HighlightWater then
-					data.HighlightWater.FillColor = color
-					data.HighlightWater.OutlineColor = color
-				end
-			end)
-			pcall(function() data.Label.TextColor3 = color end)
-		end
-	end)
+task.spawn(function()
+    while task.wait(0.3) do
+        if EntityESP_Enabled then 
+            ScanEntities() 
+            UpdateEntityTexts() 
+        end
+    end
+end)
 
-	-- ═══ Регистрируем Lever ESP ═══
-	RegisterESP("LeverESP", "Lever ESP", function(color)
-		LeverESP_Color = color
-		for _, data in pairs(LeverESP_Objects) do
-			pcall(function()
-				data.Highlight.FillColor = color
-				data.Highlight.OutlineColor = color
-			end)
-			pcall(function() data.Label.TextColor3 = color end)
-		end
-	end)
+RegisterCleanup("EntityESP", function()
+    EntityESP_Enabled = false
+    StopEntityESP()
+    ClearAllEntityESP()
+end)
 
-	-- ═══ UI ═══
-	local ESPListDropdown = nil
-
-	-- 1) ColorPicker "Color"
-	VisualsTab:ColorPicker({
-		Name = "Color",
-		Flag = "ESPColor",
-		Default = GlobalColor,
-		Callback = function(color)
-			if typeof(color) ~= "Color3" then
-				return
-			end
-			GlobalColor = color
-			ApplyColorByMode(color)
-		end
-	})
-
-	-- ═══ Apply to (взаимоисключающе, Global ↔ ESP) ═══
-	local GLOBAL_OPT = "Global"
-	local ESPListDropdown = nil
-	local IsProcessingDropdown = false
-	local prevGlobal = true
-	local prevESPs = {}   -- set имён выбранных ESP
-
-	local function GetMergedOptions()
-		local list = {GLOBAL_OPT}
-		for _, esp in pairs(ESPRegistry) do
-			table.insert(list, esp.Name)
-		end
-		table.sort(list, function(a, b)
-			if a == GLOBAL_OPT then return true end
-			if b == GLOBAL_OPT then return false end
-			return a < b
-		end)
-		return list
+	
 	end
-
-	-- Собрать текущее состояние в массив для Set()
-	local function BuildSelectionArray()
-		local arr = {}
-		if ESPColorGlobal then
-			table.insert(arr, GLOBAL_OPT)
-		else
-			for espKey, active in pairs(ESPColorActive) do
-				if active and ESPRegistry[espKey] then
-					table.insert(arr, ESPRegistry[espKey].Name)
-				end
-			end
-		end
-		table.sort(arr, function(a, b)
-			if a == GLOBAL_OPT then return true end
-			if b == GLOBAL_OPT then return false end
-			return a < b
-		end)
-		return arr
-	end
-
-	ESPListDropdown = VisualsTab:Dropdown({
-		Name = "Apply to",
-		Flag = "ESPApplyTo",
-		Desc = "",
-		Options = GetMergedOptions(),
-		Default = {GLOBAL_OPT},
-		Multi = true,
-		Callback = function(values)
-			if IsProcessingDropdown then return end
-			IsProcessingDropdown = true
-
-			-- Парсим выделенные
-			local selected = {}
-			if type(values) == "table" then
-				for k, v in pairs(values) do
-					if type(k) == "string" and v == true then
-						selected[k] = true
-					elseif type(v) == "string" then
-						selected[v] = true
-					end
-				end
-			elseif type(values) == "string" then
-				selected[values] = true
-			end
-
-			local nowGlobal = selected[GLOBAL_OPT] == true
-			local nowESPs = {}
-			for name, _ in pairs(selected) do
-				if name ~= GLOBAL_OPT then table.insert(nowESPs, name) end
-			end
-			local nowESPSet = {}
-			for _, n in ipairs(nowESPs) do nowESPSet[n] = true end
-
-			-- Определяем что именно изменилось
-			local globalChanged = (nowGlobal ~= prevGlobal)
-			local addedESP = false
-			local removedESP = false
-			for _, n in ipairs(nowESPs) do
-				if not prevESPs[n] then addedESP = true end
-			end
-			for n, _ in pairs(prevESPs) do
-				if not nowESPSet[n] then removedESP = true end
-			end
-
-			-- ═══ Резолвим финальное состояние ═══
-			local newSelection
-			if nowGlobal and #nowESPs > 0 then
-				-- Оба выбраны → смотрим что юзер только что нажал
-				if addedESP and not globalChanged then
-					-- был Global → нажал ESP → убираем Global
-					newSelection = nowESPs
-				else
-					-- был ESP(ы) → нажал Global → убираем все ESP
-					newSelection = {GLOBAL_OPT}
-				end
-			elseif nowGlobal then
-				newSelection = {GLOBAL_OPT}
-			elseif #nowESPs > 0 then
-				newSelection = nowESPs
-			else
-				newSelection = {}
-			end
-
-			-- Применяем к системе
-			ESPColorGlobal = false
-			for k, _ in pairs(ESPColorActive) do ESPColorActive[k] = false end
-			for _, name in ipairs(newSelection) do
-				if name == GLOBAL_OPT then
-					ESPColorGlobal = true
-				else
-					for espKey, esp in pairs(ESPRegistry) do
-						if esp.Name == name or espKey == name then
-							ESPColorActive[espKey] = true
-						end
-					end
-				end
-			end
-
-			-- Сохраняем prev
-			prevGlobal = ESPColorGlobal
-			prevESPs = {}
-			for espKey, active in pairs(ESPColorActive) do
-				if active and ESPRegistry[espKey] then
-					prevESPs[ESPRegistry[espKey].Name] = true
-				end
-			end
-
-			-- ═══ Отложенный apply + синхронизация UI ═══
-			local colorToApply = GlobalColor
-			local arrayToSet = BuildSelectionArray()
-			task.spawn(function()
-				task.wait()
-				ApplyColorByMode(colorToApply)
-
-				-- Синхронизируем визуально чекбоксы дропдауна
-				if ESPListDropdown then
-					pcall(function() ESPListDropdown:Set(arrayToSet) end)
-					pcall(function() ESPListDropdown:SetValue(arrayToSet) end)
-					pcall(function() ESPListDropdown:Update(arrayToSet) end)
-				end
-
-				task.wait(0.05)
-				IsProcessingDropdown = false
-			end)
-		end
-	})
 
 	-- ═══════════════════════════════════════════════════════════
 	-- 8. SETTINGS TAB
@@ -2859,6 +2978,7 @@ end
 		Style = "Danger",
 	Callback = function()
 		_G.SynapseUnloaded = true
+		--print("[Synapse] === UNLOAD START ===")
 		
 		-- ═══ ФОРС-СБРОС JUMP (до всего) ═══
 		AllowJumpEnabled = false
@@ -2925,6 +3045,7 @@ end
 			end
 		end)
 		
+		--print("[Synapse] === UNLOAD COMPLETE ===")
 	end
 	})
 
@@ -2951,109 +3072,61 @@ end
 	end
 
 	-- ═══ Сбор всего extra состояния ═══
-	local function CollectExtra()
-		local data = {}
-		data.MenuKeybind = (Window.Keybind and Window.Keybind.Name) or nil
-		data.KeybindListEnabled = KeybindListEnabled
-		data.ESPColorGlobal = ESPColorGlobal
-		data.ESPColorActive = ESPColorActive
-		data.GlobalColor = {GlobalColor.R, GlobalColor.G, GlobalColor.B}
-		data.DoorESP_Color = {DoorESP_Color.R, DoorESP_Color.G, DoorESP_Color.B}
-		data.KeyESP_Color = {KeyESP_Color.R, KeyESP_Color.G, KeyESP_Color.B}
-		data.LockerESP_Color = {LockerESP_Color.R, LockerESP_Color.G, LockerESP_Color.B}
-		data.SpeedValue = SpeedValue
-		data.SpeedEnabled = SpeedEnabled
-		
-		-- Keybinds: клавиши + состояние
-		data.Keybinds = {}
-		data.KeybindStates = {}
-		if KeybindRegistry then
-			for id, kb in pairs(KeybindRegistry) do
-				if kb.Key then data.Keybinds[id] = kb.Key.Name end
-				data.KeybindStates[id] = kb.State or false
-			end
-		end
-		return data
-	end
+local function CollectExtra()
+    local data = {}
+    data.MenuKeybind = (Window.Keybind and Window.Keybind.Name) or nil
+    data.KeybindListEnabled = KeybindListEnabled
 
-	local function ApplyExtra(data)
-		if type(data) ~= "table" then return end
-		
-		-- Menu keybind
-		if data.MenuKeybind then
-			local kc = Enum.KeyCode[data.MenuKeybind]
-			if kc and Window.SetKeybind then
-				pcall(function() Window:SetKeybind(kc) end)
-			end
-		end
-		
-		-- Keybind list
-		if data.KeybindListEnabled ~= nil then
-			KeybindListEnabled = data.KeybindListEnabled
-			if KeybindListEnabled then
-				if CreateKeybindGui then pcall(CreateKeybindGui) end
-				if RefreshKeybindList then pcall(RefreshKeybindList) end
-			else
-				if DestroyKeybindGui then pcall(DestroyKeybindGui) end
-			end
-		end
-		
-		-- ═══ Восстанавливаем per-ESP цвета ДО применения ═══
-		if data.GlobalColor then
-			GlobalColor = Color3.new(data.GlobalColor[1], data.GlobalColor[2], data.GlobalColor[3])
-		end
-		if data.DoorESP_Color then
-			DoorESP_Color = Color3.new(data.DoorESP_Color[1], data.DoorESP_Color[2], data.DoorESP_Color[3])
-		end
-		if data.KeyESP_Color then
-			KeyESP_Color = Color3.new(data.KeyESP_Color[1], data.KeyESP_Color[2], data.KeyESP_Color[3])
-		end
-		if data.LockerESP_Color then
-			LockerESP_Color = Color3.new(data.LockerESP_Color[1], data.LockerESP_Color[2], data.LockerESP_Color[3])
-		end
-		
-		-- ESP mode
-		if data.ESPColorGlobal ~= nil then ESPColorGlobal = data.ESPColorGlobal end
-		if data.ESPColorActive then
-			for k, v in pairs(data.ESPColorActive) do ESPColorActive[k] = v end
-		end
-		
-		-- ═══ Применяем КАЖДЫЙ цвет ОТДЕЛЬНО, не через ApplyColorByMode ═══
-		if ApplyColorToESP then
-			pcall(ApplyColorToESP, "DoorESP", DoorESP_Color)
-			pcall(ApplyColorToESP, "KeyESP", KeyESP_Color)
-			pcall(ApplyColorToESP, "LockerESP", LockerESP_Color)
-		end
-		
-		-- Keybinds (клавиши)
-		if data.Keybinds and KeybindRegistry then
-			for id, keyName in pairs(data.Keybinds) do
-				local kc = Enum.KeyCode[keyName]
-				if kc and KeybindRegistry[id] then
-					KeybindRegistry[id].Key = kc
-				end
-			end
-		end
-		
-		-- ═══ Keybind states + вызываем callback ═══
-		if data.KeybindStates and KeybindRegistry then
-			for id, state in pairs(data.KeybindStates) do
-				local kb = KeybindRegistry[id]
-				if kb then
-					kb.State = state
-					if kb.Callback then
-						pcall(kb.Callback, state)
-					end
-				end
-			end
-		end
-		
-		if RefreshKeybindList then pcall(RefreshKeybindList) end
-		
-		-- Speed (без вызова callback — чтобы не запускать бинд)
-		if data.SpeedValue ~= nil then SpeedValue = data.SpeedValue end
-		if data.SpeedEnabled ~= nil then SpeedEnabled = data.SpeedEnabled end
-	end
+    data.SpeedValue = SpeedValue
+    data.SpeedEnabled = SpeedEnabled
+    
+    data.Keybinds = {}
+    data.KeybindStates = {}
+    if KeybindRegistry then
+        for id, kb in pairs(KeybindRegistry) do
+            if kb.Key then data.Keybinds[id] = kb.Key.Name end
+            data.KeybindStates[id] = kb.State or false
+        end
+    end
+    return data
+end
+
+local function ApplyExtra(data)
+    if type(data) ~= "table" then return end
+
+    -- Дальше твой старый код (Speed, Keybinds и т.д.)
+    if data.MenuKeybind then
+        local kc = Enum.KeyCode[data.MenuKeybind]
+        if kc and Window.SetKeybind then pcall(function() Window:SetKeybind(kc) end) end
+    end
+    if data.KeybindListEnabled ~= nil then
+        KeybindListEnabled = data.KeybindListEnabled
+        if KeybindListEnabled then
+            if CreateKeybindGui then pcall(CreateKeybindGui) end
+            if RefreshKeybindList then pcall(RefreshKeybindList) end
+        else
+            if DestroyKeybindGui then pcall(DestroyKeybindGui) end
+        end
+    end
+    if data.Keybinds and KeybindRegistry then
+        for id, keyName in pairs(data.Keybinds) do
+            local kc = Enum.KeyCode[keyName]
+            if kc and KeybindRegistry[id] then KeybindRegistry[id].Key = kc end
+        end
+    end
+    if data.KeybindStates and KeybindRegistry then
+        for id, state in pairs(data.KeybindStates) do
+            local kb = KeybindRegistry[id]
+            if kb then
+                kb.State = state
+                if kb.Callback then pcall(kb.Callback, state) end
+            end
+        end
+    end
+    if RefreshKeybindList then pcall(RefreshKeybindList) end
+    if data.SpeedValue ~= nil then SpeedValue = data.SpeedValue end
+    if data.SpeedEnabled ~= nil then SpeedEnabled = data.SpeedEnabled end
+end
 
 	-- ═══ Сохранение ═══
 	local function SaveExtra(name)
@@ -3124,8 +3197,9 @@ end
 				Window:Notify({Title = "Config", Content = "Введи имя", Type = "Warning", Duration = 3})
 				return
 			end
+			name = tostring(name) -- На всякий случай
 			local ok, err = Window:SaveConfig(name)
-			SaveExtra(name)  -- ← сохраняем extra
+			SaveExtra(name)
 			if ok then
 				RefreshConfigList()
 				Window:Notify({Title = "Config", Content = "Сохранён: " .. name, Type = "Success", Duration = 3})
@@ -3388,67 +3462,13 @@ end
 			if ok2 and content then
 				local ok3, data = pcall(function() return HttpService:JSONDecode(content) end)
 				if ok3 and type(data) == "table" then
-					-- Menu keybind
-					if data.MenuKeybind then
-						local kc = Enum.KeyCode[data.MenuKeybind]
-						if kc and Window.SetKeybind then
-							pcall(function() Window:SetKeybind(kc) end)
-						end
-					end
-					-- Keybind list
-					if data.KeybindListEnabled ~= nil then
-						KeybindListEnabled = data.KeybindListEnabled
-						if KeybindListEnabled and CreateKeybindGui then pcall(CreateKeybindGui) end
-					end
-					-- Colors: восстанавливаем перед применением
-					if data.GlobalColor then
-						GlobalColor = Color3.new(data.GlobalColor[1], data.GlobalColor[2], data.GlobalColor[3])
-					end
-					if data.DoorESP_Color then
-						DoorESP_Color = Color3.new(data.DoorESP_Color[1], data.DoorESP_Color[2], data.DoorESP_Color[3])
-					end
-					if data.KeyESP_Color then
-						KeyESP_Color = Color3.new(data.KeyESP_Color[1], data.KeyESP_Color[2], data.KeyESP_Color[3])
-					end
-					if data.LockerESP_Color then
-						LockerESP_Color = Color3.new(data.LockerESP_Color[1], data.LockerESP_Color[2], data.LockerESP_Color[3])
-					end
-					if data.ESPColorGlobal ~= nil then ESPColorGlobal = data.ESPColorGlobal end
-					if data.ESPColorActive then
-						for k, v in pairs(data.ESPColorActive) do ESPColorActive[k] = v end
-					end
-					
-					-- ═══ Применяем per-ESP цвета ОТДЕЛЬНО ═══
-					if ApplyColorToESP then
-						pcall(ApplyColorToESP, "DoorESP", DoorESP_Color)
-						pcall(ApplyColorToESP, "KeyESP", KeyESP_Color)
-						pcall(ApplyColorToESP, "LockerESP", LockerESP_Color)
-					end
-					
-					-- Keybinds: клавиши
-					if data.Keybinds and KeybindRegistry then
-						for id, keyName in pairs(data.Keybinds) do
-							local kc = Enum.KeyCode[keyName]
-							if kc and KeybindRegistry[id] then
-								KeybindRegistry[id].Key = kc
-							end
-						end
-					end
-					-- Keybind states + callback
-					if data.KeybindStates and KeybindRegistry then
-						for id, state in pairs(data.KeybindStates) do
-							local kb = KeybindRegistry[id]
-							if kb then
-								kb.State = state
-								if kb.Callback then pcall(kb.Callback, state) end
-							end
-						end
-					end
-					if RefreshKeybindList then pcall(RefreshKeybindList) end
+					-- Вызываем нашу новую чистую функцию загрузки!
+					ApplyExtra(data)
 				end
 			end
 		end
 
+		--print("[AutoLoad] Загружен: " .. name)
 		
 		-- ═══ Обновляем Desc у Rebind-кнопок ═══
 		if _G.UpdateRebindDesc then
@@ -3461,4 +3481,4 @@ end
 		end)
 	end)
 
-	print("SFY")
+	print("FROV")
