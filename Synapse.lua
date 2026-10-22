@@ -46,6 +46,21 @@
 		
 
 	local function RunAllCleanups()
+		-- ═══ ТОТАЛЬНАЯ ЗАЧИСТКА ESP (чтобы не оставалось фантомов) ═══
+		pcall(function()
+			local roots = {LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui")}
+			for _, root in ipairs(roots) do
+				if root then
+					for _, obj in ipairs(root:GetDescendants()) do
+						local n = obj.Name
+						if n:find("NL_") or n:find("Synapse") or n:find("Airflow") or n:find("StartDoorESP") then
+							obj:Destroy()
+						end
+					end
+				end
+			end
+		end)
+		
 		--print("[Synapse] Cleanup start, functions: " .. #CleanupRegistry)
 		for _, entry in ipairs(CleanupRegistry) do
 			local ok, err = pcall(entry.Fn)
@@ -79,7 +94,6 @@
 	local RunService = game:GetService("RunService")
 	local Players = game:GetService("Players")
 	local LocalPlayer = Players.LocalPlayer
-	local ContextActionService = game:GetService("ContextActionService")
 
 	_G.NL_MouseUnlockConn = nil
 
@@ -566,68 +580,88 @@ end)
 -- ═══════════════════════════════════════════════════════════
 ExploitsTab:Section({Name = "Bypass"})
 
-local AntiVoid_Enabled = false
-local LastSafePos = nil
-local LastSafeTime = 0
-local UIS = game:GetService("UserInputService")
+	local AntiVoid_Enabled = false
+	local LastSafePos = nil
+	local LastSafeTime = 0
 
-ExploitsTab:Toggle({
-    Name = "Bypass Void",
-    Desc = "Телепорт при быстром падении (скипы работают если держать Space)",
-    Default = false,
-    Flag = "BypassVoid",
-    Callback = function(value)
-        AntiVoid_Enabled = value
-        if value then
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then LastSafePos = hrp.Position end
-        else
-            LastSafePos = nil
-        end
-    end,
-})
+	ExploitsTab:Toggle({
+		Name = "Bypass Void",
+		Desc = "Телепорт назад при падении в бездну",
+		Default = false,
+		Flag = "BypassVoid",
+		Callback = function(value)
+			AntiVoid_Enabled = value
+			if value then
+				local char = LocalPlayer.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				if hrp then LastSafePos = hrp.Position end
+			else
+				LastSafePos = nil
+			end
+		end,
+	})
 
-task.spawn(function()
-    while task.wait(0.15) do
-        if _G.SynapseUnloaded then break end
-        if not AntiVoid_Enabled then continue end
+	task.spawn(function()
+		while task.wait(0.1) do
+			if _G.SynapseUnloaded then break end
+			if not AntiVoid_Enabled then continue end
 
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not hrp or not hum then continue end
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not hrp or not hum then continue end
 
-        local myPos = hrp.Position
-        local velY = hrp.AssemblyLinearVelocity.Y
+			local myPos = hrp.Position
 
-        -- ═══ Стоим на земле → сохраняем ═══
-        if hum.FloorMaterial ~= Enum.Material.Air then
-            LastSafePos = myPos
-            LastSafeTime = tick()
-        end
+			-- ═══ Стоим на земле → сохраняем позицию ═══
+			if hum.FloorMaterial ~= Enum.Material.Air then
+				LastSafePos = myPos
+				LastSafeTime = tick()
+			end
 
-        -- ═══ Быстрое падение > 2 сек → телепорт ═══
-        if velY < -70 and LastSafePos then
-            -- Держит ли игрок Space (прыгает)?
-            local holdingSpace = UIS:IsKeyDown(Enum.KeyCode.Space)
+			-- ═══ Если мы в воздухе, проверяем, что под нами ═══
+			if hum.FloorMaterial == Enum.Material.Air then
+				local rayParams = RaycastParams.new()
+				rayParams.FilterDescendantsInstances = {char}
+				rayParams.FilterType = Enum.RaycastFilterType.Exclude
+				
+				-- Пускаем луч вниз на 1000 студов
+				local result = workspace:Raycast(myPos, Vector3.new(0, -1000, 0), rayParams)
+				
+				if result and result.Instance then
+					local hit = result.Instance
+					local isVoid = false
+					
+					-- ═══ 1. Проверяем имя (Ocean / Ocena, как в диагностике) ═══
+					if hit.Name:lower():find("ocean") or hit.Name:lower():find("ocena") then
+						isVoid = true
+					end
+					
+					-- ═══ 2. Проверяем черный неон (на всякий случай) ═══
+					if hit:IsA("BasePart") and hit.Material == Enum.Material.Neon then
+						local c = hit.Color
+						if c.R < 0.1 and c.G < 0.1 and c.B < 0.1 then
+							isVoid = true
+						end
+					end
+					
+					-- ═══ 3. Если это бездна — телепортируем ═══
+					if isVoid then
+						if LastSafePos and tick() - LastSafeTime > 0.2 then
+							hrp.CFrame = CFrame.new(LastSafePos + Vector3.new(0, 3, 0))
+							hrp.AssemblyLinearVelocity = Vector3.zero
+							--print("[Bypass Void] ⚡ Телепорт (Найден черный неон!)")
+						end
+					end
+				end
+			end
+		end
+	end)
 
-            if not holdingSpace then
-                -- Не держит → это случайное падение в void → телепорт
-                if tick() - LastSafeTime > 0.2 then
-                    hrp.CFrame = CFrame.new(LastSafePos + Vector3.new(0, 3, 0))
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    --print("[Bypass Void] ⚡ Телепорт | velY:", math.floor(velY))
-                end
-            end
-        end
-    end
-end)
-
-RegisterCleanup("BypassVoid", function()
-    AntiVoid_Enabled = false
-    LastSafePos = nil
-end)
+	RegisterCleanup("BypassVoid", function()
+		AntiVoid_Enabled = false
+		LastSafePos = nil
+	end)
 
 	-- ═══════════════════════════════════════════════════════════
 	-- EXPLOITS → AUTOMATION
@@ -852,7 +886,6 @@ end)
 -- ═══════════════════════════════════════════════════════════
 -- AutoPipePuzzle v14 (Строгий DFS, фикс дистанции и выключения)
 -- ═══════════════════════════════════════════════════════════
-ExploitsTab:Section({Name = "Automation"})
 
 local AutoPipe_Enabled = false
 local AutoPipe_Conn = nil
@@ -1114,7 +1147,7 @@ end
 
 ExploitsTab:Toggle({
     Name = "AutoPipePuzzle",
-    Desc = "Строгий DFS (крутит соседей, затем себя)",
+    Desc = "Сам собирает паззл с трубами(НЕРАБОЧАЯ)",
     Default = false, Flag = "AutoPipePuzzle",
     Callback = function(value)
         --print("[AutoPipe] Toggle:", value)
@@ -1152,6 +1185,139 @@ RegisterCleanup("AutoPipePuzzle", function()
     if AutoPipe_Conn then AutoPipe_Conn:Disconnect() AutoPipe_Conn = nil end
 end)
 
+-- ═══════════════════════════════════════════════════════════
+-- AutoGenerator (Ждет открытия UI и жмет кнопку)
+-- ═══════════════════════════════════════════════════════════
+local AutoGen_Enabled = false
+local AutoGen_CurrentGen = nil
+
+local function FindGenerator()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local myPos = hrp.Position
+
+    local nearest, nearestDist = nil, 20
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:lower():find("generator") or obj.Name:lower():find("gen")) then
+            local part = obj:FindFirstChild("ProxyPart") or obj:FindFirstChildWhichIsA("BasePart", true)
+            if part then
+                local dist = (myPos - part.Position).Magnitude
+                if dist < nearestDist then
+                    nearestDist = dist
+                    nearest = obj
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function FixGenerator(gen)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    local proxy = gen:FindFirstChild("ProxyPart")
+    local proxyPos = proxy and proxy.Position or gen:GetPivot().Position
+    
+    -- Сервер требует быть в 5 студах
+    if (hrp.Position - proxyPos).Magnitude > 5 then return end
+
+    local remoteFunc = gen:FindFirstChild("RemoteFunction")
+    local remoteEvent = gen:FindFirstChild("RemoteEvent")
+    
+    if not remoteFunc or not remoteEvent then
+        --print("[AutoGen] ❌ Не найдены Remote-объекты в генераторе!")
+        return
+    end
+
+    -- 1. Занимаем генератор (InvokeServer)
+    local success, result = pcall(function()
+        return remoteFunc:InvokeServer()
+    end)
+    
+    if not success or not result then
+        return -- Не удалось занять (например, далеко или занят)
+    end
+
+    --print("[AutoGen] 🔧 Начинаем починку напрямую...")
+
+    -- 2. Отправляем "Успех" 5 раз с задержкой
+    for i = 1, 5 do
+        if not AutoGen_Enabled then break end
+        if not hrp or not gen.Parent then break end
+        
+        -- Проверяем, не отошли ли мы
+        if (hrp.Position - proxyPos).Magnitude > 6.5 then break end
+        
+        -- Проверяем, не починили ли его уже
+        local fixedVal = gen:FindFirstChild("Fixed", true)
+        if fixedVal and fixedVal.Value >= 100 then break end
+        
+        -- Отправляем true на сервер (обходим кулдаун 0.3с)
+        pcall(function()
+            remoteEvent:FireServer(true)
+        end)
+        
+        task.wait(0.35) 
+    end
+    
+    --print("[AutoGen] ✅ Готово!")
+end
+
+ExploitsTab:Toggle({
+    Name = "AutoGenerator",
+    Desc = "Сам чинит генераторы",
+    Default = false, 
+    Flag = "AutoGenerator",
+    Callback = function(value)
+        AutoGen_Enabled = value
+        if not value then AutoGen_CurrentGen = nil end
+    end,
+})
+
+task.spawn(function()
+    while task.wait(0.2) do
+        if _G.SynapseUnloaded then break end
+        if not AutoGen_Enabled then 
+            AutoGen_CurrentGen = nil
+            continue 
+        end
+
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        
+        local gen = FindGenerator()
+        if gen then
+            local proxy = gen:FindFirstChild("ProxyPart")
+            local proxyPos = proxy and proxy.Position or gen:GetPivot().Position
+            local dist = (hrp.Position - proxyPos).Magnitude
+            
+            -- Ждем, пока подойдем на 5 студов
+            if dist <= 5 then
+                if gen ~= AutoGen_CurrentGen then
+                    AutoGen_CurrentGen = gen
+                    task.spawn(function()
+                        FixGenerator(gen)
+                        -- Кулдаун после попытки, чтобы не спамить
+                        task.wait(2) 
+                        AutoGen_CurrentGen = nil 
+                    end)
+                end
+            end
+        else
+            AutoGen_CurrentGen = nil
+        end
+    end
+end)
+
+RegisterCleanup("AutoGenerator", function()
+    AutoGen_Enabled = false
+    AutoGen_CurrentGen = nil
+end)
+
 	local VisualsTab  = Window:Tab({Name = "Visuals"})
 	local SettingsTab = Window:Tab({Name = "Settings"})
 
@@ -1162,6 +1328,9 @@ end)
 	local KeybindGui = nil
 	local KeybindListEnabled = false
 	local RebindingId = nil
+	local CurRomGui = nil
+	local CurRomLabel = nil
+	local CurRomEnabled = false
 
 	local function RegisterKeybind(id, name, defaultKey, callback, mode)
 		KeybindRegistry[id] = {
@@ -1304,6 +1473,97 @@ end)
 			KeybindGui.Parent:Destroy()
 		end
 		KeybindGui = nil
+	end
+	
+		-- ═══ НОВОЕ: Создание экранчика CurRom ═══
+	local function CreateCurRomGui()
+		if CurRomGui then return end
+		local screen = Instance.new("ScreenGui")
+		screen.Name = "Synapse_CurRom"
+		screen.ResetOnSpawn = false
+		screen.Parent = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+
+		local frame = Instance.new("Frame")
+		frame.Name = "Main"
+		-- ═══ ФИКС: Базовый размер 0, включена авто-подстройка ═══
+		frame.Size = UDim2.new(0, 0, 0, 0)
+		frame.AutomaticSize = Enum.AutomaticSize.XY
+		frame.Position = UDim2.new(0, 20, 0, 150)
+		frame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+		frame.BackgroundTransparency = 0.15
+		frame.BorderSizePixel = 0
+		frame.Active = true
+		frame.Parent = screen
+
+		local corner = Instance.new("UICorner", frame)
+		corner.CornerRadius = UDim.new(0, 6)
+
+		local stroke = Instance.new("UIStroke", frame)
+		stroke.Color = Color3.fromRGB(80, 60, 120)
+		stroke.Thickness = 1
+		stroke.Transparency = 0.3
+
+		-- ═══ ФИКС: Внутренние отступы, чтобы текст не прилипал к краям ═══
+		local padding = Instance.new("UIPadding", frame)
+		padding.PaddingTop = UDim.new(0, 8)
+		padding.PaddingBottom = UDim.new(0, 8)
+		padding.PaddingLeft = UDim.new(0, 10)
+		padding.PaddingRight = UDim.new(0, 10)
+
+		local layout = Instance.new("UIListLayout", frame)
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Padding = UDim.new(0, 2)
+
+		local title = Instance.new("TextLabel", frame)
+		title.Name = "Title"
+		title.Size = UDim2.new(0, 0, 0, 20)
+		title.AutomaticSize = Enum.AutomaticSize.X
+		title.BackgroundTransparency = 1
+		title.Text = "Current Room"
+		title.TextColor3 = Color3.fromRGB(220, 220, 230)
+		title.TextSize = 12
+		title.Font = Enum.Font.GothamBold
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.LayoutOrder = 1
+
+		CurRomLabel = Instance.new("TextLabel", frame)
+		CurRomLabel.Size = UDim2.new(0, 0, 0, 20)
+		CurRomLabel.AutomaticSize = Enum.AutomaticSize.X
+		CurRomLabel.BackgroundTransparency = 1
+		CurRomLabel.Text = "Unknown"
+		CurRomLabel.TextColor3 = Color3.fromRGB(180, 130, 255)
+		CurRomLabel.TextSize = 14
+		CurRomLabel.Font = Enum.Font.GothamBold
+		CurRomLabel.TextXAlignment = Enum.TextXAlignment.Left
+		CurRomLabel.LayoutOrder = 2
+
+		-- Перетаскивание (оставляем как было)
+		local dragging, dragStart, startPos
+		title.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = frame.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then dragging = false end
+				end)
+			end
+		end)
+		UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = input.Position - dragStart
+				frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+			end
+		end)
+
+		CurRomGui = frame
+	end
+
+	local function DestroyCurRomGui()
+		if CurRomGui and CurRomGui.Parent then
+			CurRomGui.Parent:Destroy()
+		end
+		CurRomGui = nil
 	end
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -1491,8 +1751,253 @@ end)
 	-- КАСТОМНЫЕ ТУМБЛЕРЫ С КВАДРАТИКОМ ЦВЕТА
 	-- ═══════════════════════════════════════════════════════════
 	local activePicker = nil
+	local CurrentRoomModel = nil
+	local LastRoomModel = nil
 
-	local function MakeESP(name, desc, defaultColor, flag, colorFlag, toggleCallback, colorCallback)
+	local function GetRoomFromObject(obj)
+		local rooms = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms")
+		if not rooms then return nil end
+		
+		local p = obj
+		while p and p ~= workspace do
+			-- Если родитель этого объекта — сама папка Rooms, значит мы нашли модель комнаты
+			if p.Parent == rooms then
+				return p
+			end
+			p = p.Parent
+		end
+		return nil
+	end
+	
+		local TweenService = game:GetService("TweenService")
+	local fadeInfo = TweenInfo.new(0.3, Enum.EasingStyle.Linear)
+	
+	-- Плавное появление/исчезновение ESP
+	local function FadeESP(data, visible)
+		local fill = visible and 0.5 or 1
+		local outline = visible and 0 or 1
+		local text = visible and 0 or 1
+
+		if data.Highlights then
+			for _, hl in ipairs(data.Highlights) do
+				TweenService:Create(hl, fadeInfo, {FillTransparency = fill, OutlineTransparency = outline}):Play()
+			end
+		elseif data.Highlight then
+			TweenService:Create(data.Highlight, fadeInfo, {FillTransparency = fill, OutlineTransparency = outline}):Play()
+		end
+
+		if data.Billboard then
+			for _, obj in ipairs(data.Billboard:GetDescendants()) do
+				if obj:IsA("TextLabel") then
+					TweenService:Create(obj, fadeInfo, {TextTransparency = text, TextStrokeTransparency = text}):Play()
+				end
+			end
+		end
+		if data.BillboardText then
+			 for _, obj in ipairs(data.BillboardText:GetDescendants()) do
+				if obj:IsA("TextLabel") then
+					TweenService:Create(obj, fadeInfo, {TextTransparency = text, TextStrokeTransparency = text}):Play()
+				end
+			end
+		end
+		if data.CircleFrame then
+			TweenService:Create(data.CircleFrame, fadeInfo, {BackgroundTransparency = visible and 0.85 or 1}):Play()
+		end
+		if data.Stroke then
+			TweenService:Create(data.Stroke, fadeInfo, {Transparency = outline}):Play()
+		end
+	end
+
+	local LastPlayerRoomModel = nil
+
+	local function GetPlayerRoom()
+		local rooms = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms")
+		if not rooms then return nil end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return nil end
+
+		local myPos = hrp.Position
+		local bestRoom = nil
+		local minDist = math.huge
+
+		-- ═══ ФИКС: Ищем комнату, к которой принадлежит пол ровно под ногами ═══
+		local overlapParams = OverlapParams.new()
+		overlapParams.FilterDescendantsInstances = {char}
+		overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+
+		-- Берем маленький куб 2х2х2
+		local touchingParts = workspace:GetPartBoundsInBox(hrp.CFrame, Vector3.new(2, 2, 2), overlapParams)
+		
+		for _, part in ipairs(touchingParts) do
+			local p = part
+			while p and p ~= workspace do
+				if p.Parent == rooms then
+					local n = p.Name:lower()
+					if n ~= "start" and n ~= "chasestart" and n ~= "chaseend" and n ~= "searchlightstramstart" then
+						-- Вычисляем, насколько близко комната к центру игрока
+						local ok, cf = pcall(function() return p:GetPivot() end)
+						if ok and cf then
+							local dist = (myPos - cf.Position).Magnitude
+							if dist < minDist then
+								minDist = dist
+								bestRoom = p
+							end
+						end
+					end
+					break
+				end
+				p = p.Parent
+			end
+		end
+
+		-- Запасной вариант, если пол не прогрузился
+		if not bestRoom then
+			local rayParams = RaycastParams.new()
+			rayParams.FilterDescendantsInstances = {char}
+			rayParams.FilterType = Enum.RaycastFilterType.Exclude
+			local result = workspace:Raycast(myPos, Vector3.new(0, -20, 0), rayParams)
+			if result and result.Instance then
+				local p = result.Instance
+				while p and p ~= workspace do
+					if p.Parent == rooms then
+						bestRoom = p
+						break
+					end
+					p = p.Parent
+				end
+			end
+		end
+
+		return bestRoom
+	end
+
+	    -- ═══ HELPER: номер комнаты ═══
+    local function GetRoomNumberFromModel(room)
+        if not room then return nil end
+        local lights = room:FindFirstChild("Lights")
+        local sign = lights and lights:FindFirstChild("Sign")
+        if sign then
+            local sg = sign:FindFirstChild("SurfaceGui") or sign:FindFirstChildWhichIsA("SurfaceGui", true)
+            if sg then
+                local lbl = sg:FindFirstChildWhichIsA("TextLabel", true)
+                if lbl and lbl.Text then
+                    local num = tonumber(lbl.Text)
+                    if num then return num end
+                end
+            end
+        end
+        return nil
+    end
+
+    -- ═══ HELPER: следующая комната по прогрессии ═══
+    local function GetNextRoom(currentRoom)
+        if not currentRoom then return nil end
+        local rooms = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms")
+        if not rooms then return nil end
+
+        -- SideroomN → SideroomN+1
+        local sideNum = currentRoom.Name:match("^[Ss]ide[Rr]oom(%d+)")
+        if sideNum then
+            local target = tonumber(sideNum) + 1
+            for _, room in ipairs(rooms:GetChildren()) do
+                if room:IsA("Model") then
+                    local rNum = room.Name:match("^[Ss]ide[Rr]oom(%d+)")
+                    if rNum and tonumber(rNum) == target then return room end
+                end
+            end
+        end
+
+        -- Стандарт: sign N → target N-1
+        local currentNum = GetRoomNumberFromModel(currentRoom)
+        if currentNum then
+            local target = currentNum - 1
+            for _, room in ipairs(rooms:GetChildren()) do
+                if room:IsA("Model") and room ~= currentRoom then
+                    if GetRoomNumberFromModel(room) == target then return room end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    -- ═══ HELPER: ближайшая комната (fallback) ═══
+    local RoomBoundsCache = {}
+    local function GetRoomBounds(room)
+        if RoomBoundsCache[room] then return RoomBoundsCache[room] end
+        local ok, cf, size = pcall(function() return room:GetBoundingBox() end)
+        if ok and cf and size then
+            RoomBoundsCache[room] = {cf = cf, size = size}
+            return RoomBoundsCache[room]
+        end
+        return nil
+    end
+
+    local function FindNearestRoomToPlayer(myPos, excludeRoom)
+        local rooms = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms")
+        if not rooms then return nil end
+        local nearestRoom, nearestDist = nil, math.huge
+        for _, room in ipairs(rooms:GetChildren()) do
+            if room:IsA("Model") and room ~= excludeRoom then
+                local n = room.Name
+                if n ~= "ChaseStart" and n ~= "ChaseEnd" and n ~= "SearchlightsTramStart" and n ~= "Start" then
+                    local bounds = GetRoomBounds(room)
+                    if bounds then
+                        local rel = bounds.cf:PointToObjectSpace(myPos)
+                        local dx = math.max(0, math.abs(rel.X) - bounds.size.X/2)
+                        local dy = math.max(0, math.abs(rel.Y) - bounds.size.Y/2)
+                        local dz = math.max(0, math.abs(rel.Z) - bounds.size.Z/2)
+                        local dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                        if dist < nearestDist then
+                            nearestDist = dist
+                            nearestRoom = room
+                        end
+                    end
+                end
+            end
+        end
+        return nearestRoom
+    end
+
+    -- ═══ HELPER: реальная дверь (фильтр от фейков) ═══
+    local function IsDoorValid(door)
+        if not door or not door.Parent then return false end
+        
+        local success, result = pcall(function()
+            local n = door.Name:lower()
+            if not n:find("door") then return false end
+            
+            -- ═══ ФИКС: Проверяем Exit/Enter и у самой двери, и у её родителя ═══
+            local hasExit = door:FindFirstChild("Exit") or door:FindFirstChild("Enter")
+            if not hasExit and door.Parent then
+                hasExit = door.Parent:FindFirstChild("Exit") or door.Parent:FindFirstChild("Enter")
+            end
+            
+            if not hasExit then return false end
+
+            local hasPrompt = false
+            for _, d in ipairs(door:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then hasPrompt = true break end
+            end
+            local isBroken = n:find("broken")
+            if not hasPrompt and not isBroken then return false end
+            
+            for _, part in ipairs(door:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "Collision" then
+                    if part.Size.Y > 5 and (part.Size.X > 5 or part.Size.Z > 5) then
+                        return true
+                    end
+                end
+            end
+            return false
+        end)
+        
+        return success and result
+    end
+
+		local function MakeESP(name, desc, defaultColor, flag, colorFlag, toggleCallback, colorCallback)
 		local toggle = VisualsTab:Toggle({
 			Name = name,
 			Desc = desc,
@@ -1507,60 +2012,64 @@ end)
 			switch.Position = UDim2.new(1, -50, 0.5, 0)
 		end
 		
-		-- Создаем квадратик
-		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.fromOffset(20, 20)
-		btn.AnchorPoint = Vector2.new(0.5, 0.5) -- ← ВОТ ЭТА СТРОЧКА
-		btn.Position = UDim2.new(1, -26, 0.5, 0)
-		btn.BackgroundColor3 = defaultColor
-		btn.Text = ""
-		btn.AutoButtonColor = false
-		btn.Parent = toggle._frame
-		
-		local corner = Instance.new("UICorner", btn)
-		corner.CornerRadius = UDim.new(0, 4)
-		local stroke = Instance.new("UIStroke", btn)
-		stroke.Color = Color3.fromRGB(60, 60, 60)
-		
-		-- Создаем скрытую палитру, которая будет выезжать при клике
-		local picker = VisualsTab:ColorPicker({
-			Name = name .. " Color",
-			Flag = colorFlag,
-			Default = defaultColor,
-			Callback = function(color)
-				btn.BackgroundColor3 = color
-				if colorCallback then colorCallback(color) end
-			end
-		})
-		
-		-- Изначально прячем палитру
-		if picker._frame then
-			picker._frame.Visible = false
-		end
-		
-		-- Клик по квадратику открывает/закрывает палитру
-		btn.MouseButton1Click:Connect(function()
-			if picker._frame then
-				if activePicker and activePicker ~= picker then
-					activePicker._frame.Visible = false
+		-- Создаем квадратик (только если передан colorFlag)
+		if colorFlag then
+			local btn = Instance.new("TextButton")
+			btn.Size = UDim2.fromOffset(20, 20)
+			btn.AnchorPoint = Vector2.new(0.5, 0.5)
+			btn.Position = UDim2.new(1, -26, 0.5, 0)
+			btn.BackgroundColor3 = defaultColor
+			btn.Text = ""
+			btn.AutoButtonColor = false
+			btn.Parent = toggle._frame
+			
+			local corner = Instance.new("UICorner", btn)
+			corner.CornerRadius = UDim.new(0, 4)
+			local stroke = Instance.new("UIStroke", btn)
+			stroke.Color = Color3.fromRGB(60, 60, 60)
+			
+			-- Создаем скрытую палитру, которая будет выезжать при клике
+			local picker = VisualsTab:ColorPicker({
+				Name = name .. " Color",
+				Flag = colorFlag,
+				Default = defaultColor,
+				Callback = function(color)
+					btn.BackgroundColor3 = color
+					if colorCallback then colorCallback(color) end
 				end
-				picker._frame.Visible = not picker._frame.Visible
-				activePicker = picker
+			})
+			
+			-- Изначально прячем палитру
+			if picker._frame then
+				picker._frame.Visible = false
 			end
-		end)
-		
-		-- Применяем цвет при загрузке (для конфига)
-		if colorCallback then colorCallback(defaultColor) end
+			
+			-- Клик по квадратику открывает/закрывает палитру
+			btn.MouseButton1Click:Connect(function()
+				if picker._frame then
+					if activePicker and activePicker ~= picker then
+						activePicker._frame.Visible = false
+					end
+					picker._frame.Visible = not picker._frame.Visible
+					activePicker = picker
+				end
+			end)
+			
+			-- Применяем цвет при загрузке (для конфига)
+			if colorCallback then colorCallback(defaultColor) end
+		end -- ═══ ВОТ ЭТОТ END ЗАКРЫВАЕТ IF colorFlag ═══
 	end
 	
 	-- ═══════════════════════════════════════════════════════════
-	-- DOOR ESP (v13 — чистая заливка через Box)
+	-- DOOR ESP
 	-- ═══════════════════════════════════════════════════════════
 	local DoorESP_Enabled = false
 	local DoorESP_Color = Color3.fromRGB(220, 60, 60)
 	local DoorESP_Objects = {}
 	local DoorESP_Conn = nil
 	local RoomNumberCache = {}
+	local LastPlayerPos = nil
+	local RoomSignCache = {} 
 
 	-- Размеры бокса (подбираем вручную)
 	local DOOR_SCALE_X = 76       -- % ширины
@@ -1586,114 +2095,142 @@ end)
 		return false
 	end
 
-	local function IsWorkingDoor(model)
-		if not model or not model:IsA("Model") then return false end
-		local n = model.Name:lower()
-		if n == "lock" or n:find("cantspawn") then return false end
-		for _, obj in ipairs(model:GetDescendants()) do
-			if obj:IsA("ProximityPrompt") then return true end
-		end
-		return false
-	end
+	-- ═══ БАЗА ДАННЫХ КОМНАТ ═══
+	local RoomDB = {}
+	local LastRoomName = ""
+	local CurrentRoomNum = -999 -- ═══ ФИКС: -999 значит "комната неизвестна", а 0 теперь валидная комната ═══
 
-	local function GetDoorPanels(door)
-		local candidates = {}
-		for _, obj in ipairs(door:GetDescendants()) do
-			if (obj:IsA("MeshPart") or obj:IsA("BasePart")) and not IsBadName(obj.Name) then
-				local s = obj.Size
-				local vol = s.X * s.Y * s.Z
-				if vol > 0 then
-					table.insert(candidates, {Part = obj, Volume = vol})
-				end
+	local function GetPlayerRoom()
+		local rooms = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms")
+		if not rooms then return nil end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then return nil end
+
+		-- Рейкаст в пол (он всегда находит правильную комнату)
+		local rayParams = RaycastParams.new()
+		rayParams.FilterDescendantsInstances = {char}
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		local result = workspace:Raycast(hrp.Position, Vector3.new(0, -20, 0), rayParams)
+
+		if result and result.Instance then
+			local p = result.Instance
+			while p and p ~= workspace do
+				if p.Parent == rooms then return p end
+				p = p.Parent
 			end
 		end
-		table.sort(candidates, function(a, b) return a.Volume > b.Volume end)
-		local panels = {}
-		if #candidates > 0 then
-			local maxVol = candidates[1].Volume
-			for i, c in ipairs(candidates) do
-				if c.Volume >= maxVol * 0.4 then table.insert(panels, c.Part) end
-				if i >= 6 then break end
-			end
-		end
-		return panels
+		return nil
 	end
 
-	local function GetCombinedBounds(parts)
-		local minX, minY, minZ = math.huge, math.huge, math.huge
-		local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
-		for _, p in ipairs(parts) do
-			local cf, sz = p.CFrame, p.Size
-			for x = -1, 1, 2 do
-				for y = -1, 1, 2 do
-					for z = -1, 1, 2 do
-						local corner = cf * Vector3.new(sz.X/2*x, sz.Y/2*y, sz.Z/2*z)
-						minX = math.min(minX, corner.X); maxX = math.max(maxX, corner.X)
-						minY = math.min(minY, corner.Y); maxY = math.max(maxY, corner.Y)
-						minZ = math.min(minZ, corner.Z); maxZ = math.max(maxZ, corner.Z)
+	local function UpdateCurrentRoom()
+		local room = GetPlayerRoom()
+		if not room then return end
+
+		local name = room.Name
+		
+		if name:lower() == "start" then
+			LastRoomName = "Start"
+			CurrentRoomNum = 101
+			RoomDB[name] = {101}
+			return
+		end
+
+		if name ~= LastRoomName then
+			local prevNum = CurrentRoomNum
+			local newRoomNum = nil
+
+			-- 1. Проверяем, не возвращаемся ли мы назад
+			if RoomDB[name] then
+				for _, num in ipairs(RoomDB[name]) do
+					if num == prevNum + 1 then
+						newRoomNum = num
+						break
 					end
 				end
 			end
-		end
-		local center = Vector3.new((minX+maxX)/2, (minY+maxY)/2, (minZ+maxZ)/2)
-		local size = Vector3.new(maxX-minX, maxY-minY, maxZ-minZ)
-		return CFrame.new(center), size
-	end
 
-	local function GetRoomNumber(door)
-		-- Не кэшируем результат сразу — пробуем каждый раз
-		local p, depth = door, 0
-		local roomFolder = nil
-		while p and p ~= workspace and depth < 15 do
-			if p.Name == "Rooms" then roomFolder = p break end
-			p = p.Parent
-			depth = depth + 1
-		end
-		if not roomFolder then return nil end
-
-		local roomName = door:GetFullName():match("Rooms%.([^%.]+)%.")
-		if not roomName then return nil end
-
-		local room = roomFolder:FindFirstChild(roomName)
-		if not room then return nil end
-
-		local lights = room:FindFirstChild("Lights")
-		if lights then
-			local sign = lights:FindFirstChild("Sign")
-			if sign then
-				local sg = sign:FindFirstChild("SurfaceGui")
-				if sg then
-					local lbl = sg:FindFirstChildWhichIsA("TextLabel", true)
-					if lbl and lbl.Text then
-						local num = tonumber(lbl.Text)
-						if num then
-							local r = num - 1
-							RoomNumberCache[door] = r
-							return r
+			-- 2. Если не нашли, значит идем вперед
+			if not newRoomNum then
+				if prevNum ~= -999 then
+					newRoomNum = prevNum - 1
+				end
+				
+				-- Пробуем прочитать табличку в комнате
+				if not RoomDB[name] then
+					local signNum = nil
+					local lights = room:FindFirstChild("Lights")
+					local sign = lights and lights:FindFirstChild("Sign")
+					if sign then
+						local sg = sign:FindFirstChild("SurfaceGui") or sign:FindFirstChildWhichIsA("SurfaceGui", true)
+						if sg then
+							local lbl = sg:FindFirstChildWhichIsA("TextLabel", true)
+							if lbl and lbl.Text then
+								signNum = tonumber(lbl.Text:match("(-?%d+)")) or tonumber(lbl.Text)
+							end
 						end
 					end
-				end
-			end
-		end
-
-		for _, obj in ipairs(room:GetDescendants()) do
-			if obj:IsA("SurfaceGui") then
-				local lbl = obj:FindFirstChildWhichIsA("TextLabel", true)
-				if lbl and lbl.Text then
-					local num = tonumber(lbl.Text)
-					if num and num > 9 and num <= 200 then
-						local r = num - 1
-						RoomNumberCache[door] = r
-						return r
+					
+					if signNum then
+						newRoomNum = signNum - 1
 					end
 				end
 			end
+
+			-- Жесткий клэмп (защита от прыжков)
+			if prevNum ~= -999 and newRoomNum then
+				if math.abs(newRoomNum - prevNum) > 1 then
+					newRoomNum = prevNum - 1
+				end
+			end
+
+			-- Записываем
+			if newRoomNum then
+				if not RoomDB[name] then RoomDB[name] = {} end
+				local alreadyInDB = false
+				for _, n in ipairs(RoomDB[name]) do
+					if n == newRoomNum then alreadyInDB = true break end
+				end
+				if not alreadyInDB then
+					table.insert(RoomDB[name], newRoomNum)
+				end
+				CurrentRoomNum = newRoomNum
+			end
+			LastRoomName = name
 		end
-		return RoomNumberCache[door]  -- возвращаем кэш, если уже был
 	end
 
 	local function GetUIContainer()
 		return LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+	end
+	
+	local function GetRoomNumber(door)
+		if not door then return nil end
+		
+		local exitVal = door:FindFirstChild("Exit") or door:FindFirstChild("Enter")
+		if exitVal and exitVal:IsA("StringValue") then
+			local num = tonumber(exitVal.Value:match("(-?%d+)")) -- ═══ ФИКС: Поддержка минуса ═══
+			if num then
+				RoomNumberCache[door] = num
+				return num
+			end
+		end
+
+		for _, d in ipairs(door:GetDescendants()) do
+			if d:IsA("SurfaceGui") or d:IsA("BillboardGui") then
+				local lbl = d:FindFirstChildWhichIsA("TextLabel", true)
+				if lbl and lbl.Text then
+					local num = tonumber(lbl.Text:match("(-?%d+)")) or tonumber(lbl.Text)
+					if num then
+						RoomNumberCache[door] = num
+						return num
+					end
+				end
+			end
+		end
+		
+		return RoomNumberCache[door]
 	end
 
 	local function CreateDoorESP(door)
@@ -1728,13 +2265,8 @@ end)
 					local midSide = sides[2]
 					local maxSide = sides[3]
 
-					-- ═══ 1) Створка-меш (BigDoor, DeadEndDoor) ═══
 					local isDoorMesh = n:find("door")
-
-					-- ═══ 2) Створка-панель (NormalDoor: Base, BaseAddition) ═══
 					local isPanel = (n == "base" or n == "baseaddition")
-
-					-- ═══ 3) Рама ═══
 					local isFrame = n:find("frame")
 
 					if isDoorMesh or isPanel or isFrame then
@@ -1743,11 +2275,11 @@ end)
 				end
 			end
 		end
-
 		if #doorParts == 0 then return end
 
-		-- Highlight на каждую часть
+				-- Highlight на каждую часть
 		local highlights = {}
+		
 		for _, part in ipairs(doorParts) do
 			local hl = Instance.new("Highlight")
 			hl.Name = "NL_DoorESP"
@@ -1799,7 +2331,11 @@ end)
 			Label = lbl,
 			MainPanel = mainPanel,
 			LastRoom = num,
+			IsVisible = false, -- ═══ ОБЯЗАТЕЛЬНО FALSE ═══
 		}
+		
+		-- Сразу гасим
+		FadeESP(DoorESP_Objects[door], false)
 	end
 
 	local function RemoveDoorESP(door)
@@ -1835,20 +2371,13 @@ end)
 		end)
 	end
 
-local function IsRealDoor(door)
-    -- ═══ 1) Родитель должен быть Entrances ИЛИ *Door* (DoubleDoorSewer и т.д.) ═══
-    if not door.Parent then return false end
-    local parentName = door.Parent.Name
-    if parentName ~= "Entrances" and not parentName:lower():find("door") then
-        return false
-    end
-
-    -- ═══ 2) Должен быть ProximityPrompt внутри ═══
-    for _, d in ipairs(door:GetDescendants()) do
-        if d:IsA("ProximityPrompt") then return true end
-    end
-    return false
-end
+	local function IsRealDoor(door)
+		if not door.Parent then return false end
+		for _, d in ipairs(door:GetDescendants()) do
+			if d:IsA("ProximityPrompt") then return true end
+		end
+		return false
+	end
 
 	local function ScanAllDoors()
 		for _, obj in ipairs(workspace:GetDescendants()) do
@@ -1872,45 +2401,266 @@ end
 			end
 		end)
 	end
-
-	local function UpdateDoorColors()
-		--print("[DoorESP] UpdateColors | color:", tostring(DoorESP_Color))
-		for _, data in pairs(DoorESP_Objects) do
-			pcall(function()
-				data.Highlight.FillColor = DoorESP_Color
-				data.Highlight.OutlineColor = DoorESP_Color
-			end)
-			pcall(function()
-				data.Selection.Color3 = DoorESP_Color
-				data.Selection.SurfaceColor3 = DoorESP_Color
-			end)
-			pcall(function() data.BHA.Color3 = DoorESP_Color end)
-			pcall(function() data.Label.TextColor3 = DoorESP_Color end)
-		end
-	end
-
-	local function UpdateDoorTexts()
-		if not DoorESP_Enabled then return end
-		local char = LocalPlayer.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if not hrp then return end
+	
+	local function GetPlayerRoomNumber()
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not hrp then return 0 end
 		local myPos = hrp.Position
+		
+		local closestDoorNum = nil
+		local minDist = math.huge
+		
+		-- Ищем ближайшую дверь к игроку
 		for door, data in pairs(DoorESP_Objects) do
-			if not door.Parent then RemoveDoorESP(door) continue end
-			if data.MainPanel and data.Label then
-				local panelPos = data.MainPanel.Position
-				local dist = math.floor((myPos - panelPos).Magnitude)
-				local rn = RoomNumberCache[door]
-				if not rn then rn = GetRoomNumber(door) end
-				local roomStr = rn and tostring(rn) or "?"
-				local newText = "Door " .. roomStr .. " [" .. dist .. "]"
-				if data.Label.Text ~= newText then data.Label.Text = newText end
+			if door.Parent and IsDoorValid(door) then
+				local part = door:FindFirstChildWhichIsA("BasePart", true)
+				if part then
+					local dist = (myPos - part.Position).Magnitude
+					if dist < minDist then
+						minDist = dist
+						local num = GetRoomNumber(door)
+						if num then
+							closestDoorNum = num
+						end
+					end
+				end
 			end
 		end
+		
+		-- Если нашли дверь, определяем комнату
+		if closestDoorNum then
+			-- Если мы стоим перед дверью 82, значит мы в 83.
+			-- Но если мы только что прошли в 82, то мы в 82.
+			-- Мы берем номер двери и прибавляем 1 (потому что дверь 82 находится В комнате 83).
+			return closestDoorNum + 1
+		end
+		
+		-- Если дверей рядом нет, возвращаем 0
+		return 0
 	end
+	
+		local function GetModelCenter(model)
+		local ok, cf, size = pcall(function() return model:GetBoundingBox() end)
+		if ok and cf then return cf.Position end
+		local part = model:FindFirstChildWhichIsA("BasePart")
+		if part then return part.Position end
+		return Vector3.zero
+	end
+	
+	local LastKnownRoomNum = 0
+
+    local LastValidDoor = nil
+	
+    local function UpdateNormalDoorESP()
+        if not DoorESP_Enabled then return end
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local myPos = hrp.Position
+        local myCFrame = hrp.CFrame
+
+        UpdateCurrentRoom()
+
+        if not CurrentRoomNum or CurrentRoomNum == -999 or not CurrentRoomModel then
+            for _, data in pairs(DoorESP_Objects) do
+                if data.IsVisible ~= false then data.IsVisible = false FadeESP(data, false) end
+            end
+            return
+        end
+
+        local targetNum = CurrentRoomNum - 1
+        local validDoors = {}
+
+        -- ═══ 1. Ищем ВСЕ двери по номеру на табличке ═══
+        for door, data in pairs(DoorESP_Objects) do
+            if door.Parent and IsDoorValid(door) then
+                local doorNum = GetRoomNumber(door)
+                if doorNum == targetNum then
+                    local part = door:FindFirstChildWhichIsA("BasePart", true)
+                    if part then
+                        -- ═══ ФИКС СТАРОЙ ДВЕРИ: Если дверь позади нас (Z > 5), не добавляем её ═══
+                        local relativePos = myCFrame:PointToObjectSpace(part.Position)
+                        if relativePos.Z < 5 then 
+                            table.insert(validDoors, door)
+                        end
+                    end
+                end
+            end
+        end
+
+        -- ═══ 2. Если по табличкам не нашли, используем базу и Exit ═══
+        if #validDoors == 0 then
+            local targetRoomModel = nil
+            local rooms = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms")
+            if rooms then
+                for roomName, roomNum in pairs(RoomDB) do
+                    if roomNum == targetNum then
+                        targetRoomModel = rooms:FindFirstChild(roomName)
+                        break
+                    end
+                end
+                if not targetRoomModel then
+                    for _, room in ipairs(rooms:GetChildren()) do
+                        if room:IsA("Model") and not RoomDB[room.Name] and room.Name:lower() ~= "start" then
+                            targetRoomModel = room
+                            break
+                        end
+                    end
+                end
+            end
+
+            if targetRoomModel then
+                for door, data in pairs(DoorESP_Objects) do
+                    if door.Parent and IsDoorValid(door) then
+                        local part = door:FindFirstChildWhichIsA("BasePart", true)
+                        if part then
+                            -- ═══ ФИКС СТАРОЙ ДВЕРИ ═══
+                            local relativePos = myCFrame:PointToObjectSpace(part.Position)
+                            if relativePos.Z < 5 then 
+                                local exitVal = door:FindFirstChild("Exit") or (door.Parent and door.Parent:FindFirstChild("Exit"))
+                                if (exitVal and exitVal:IsA("StringValue") and exitVal.Value:find(targetRoomModel.Name)) or door:IsDescendantOf(targetRoomModel) then
+                                    table.insert(validDoors, door)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        -- ═══ 3. Применяем видимость и принудительно обновляем Highlight ═══
+        local targetNumStr = tostring(targetNum)
+        for door, data in pairs(DoorESP_Objects) do
+            if not door.Parent then continue end
+            
+            local isVisible = false
+            for _, vDoor in ipairs(validDoors) do
+                if door == vDoor then
+                    isVisible = true
+                    break
+                end
+            end
+            
+            if data.IsVisible ~= isVisible then
+                data.IsVisible = isVisible
+                FadeESP(data, isVisible)
+            end
+            
+            -- ═══ ФИКС ПРОПАДАЮЩИХ ХАЙЛАЙТОВ (Обновление) ═══
+            if isVisible and data.Highlights then
+                for _, hl in ipairs(data.Highlights) do
+                    if hl.Parent then
+                        hl.Enabled = false
+                        hl.Enabled = true
+                    end
+                end
+            end
+            
+            if isVisible and data.Label then
+                local part = door:FindFirstChildWhichIsA("BasePart", true)
+                local dist = part and math.floor((myPos - part.Position).Magnitude) or 0
+                local newText = "Door " .. targetNumStr .. " [" .. dist .. "]"
+                if data.Label.Text ~= newText then data.Label.Text = newText end
+            end
+        end
+    end
+	
+	-- ═══════════════════════════════════════════════════════════
+	-- START DOOR (текст над дверью, без обводки)
+	-- ═══════════════════════════════════════════════════════════
+	local StartDoorBillboard = nil
+	local StartDoorLabel = nil
+	local StartDoorHighlight = nil
+
+	local function UpdateStartDoorESP()
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		local myPos = hrp and hrp.Position or Vector3.zero
+		
+		local startRoom = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Rooms") and workspace.GameplayFolder.Rooms:FindFirstChild("Start")
+		local normalDoor = startRoom and startRoom:FindFirstChild("NormalDoor", true)
+		
+		if not normalDoor then
+			if StartDoorBillboard then StartDoorBillboard.Enabled = false end
+			if StartDoorHighlight then StartDoorHighlight.Enabled = false end
+			return
+		end
+		
+		-- ═══ Создаем Highlight ОДИН РАЗ ═══
+		if not StartDoorHighlight then
+			StartDoorHighlight = Instance.new("Highlight")
+			StartDoorHighlight.Name = "NL_StartDoorESP"
+			StartDoorHighlight.FillColor = DoorESP_Color
+			StartDoorHighlight.FillTransparency = 0.5
+			StartDoorHighlight.OutlineColor = DoorESP_Color
+			StartDoorHighlight.OutlineTransparency = 0
+			StartDoorHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			StartDoorHighlight.Parent = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+		end
+		
+		-- Обновляем обводку
+		StartDoorHighlight.Adornee = normalDoor
+		StartDoorHighlight.Enabled = true
+		StartDoorHighlight.FillColor = DoorESP_Color
+		StartDoorHighlight.OutlineColor = DoorESP_Color
+
+		-- ═══ Создаем Billboard ОДИН РАЗ ═══
+		if not StartDoorBillboard then
+			StartDoorBillboard = Instance.new("BillboardGui")
+			StartDoorBillboard.Name = "StartDoorESP_Billboard"
+			StartDoorBillboard.Size = UDim2.new(0, 240, 0, 30)
+			StartDoorBillboard.AlwaysOnTop = true
+			StartDoorBillboard.MaxDistance = 1000
+			StartDoorBillboard.LightInfluence = 0
+			StartDoorBillboard.Parent = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+			
+			StartDoorLabel = Instance.new("TextLabel")
+			StartDoorLabel.Size = UDim2.new(1, 0, 1, 0)
+			StartDoorLabel.BackgroundTransparency = 1
+			StartDoorLabel.TextColor3 = DoorESP_Color
+			StartDoorLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+			StartDoorLabel.TextStrokeTransparency = 0
+			StartDoorLabel.TextSize = 18
+			StartDoorLabel.Font = Enum.Font.GothamBold
+			StartDoorLabel.Parent = StartDoorBillboard
+		end
+		
+		StartDoorBillboard.Adornee = normalDoor
+		StartDoorBillboard.Enabled = true
+		StartDoorBillboard.StudsOffsetWorldSpace = Vector3.new(2.5, 11, 0) 
+		
+		StartDoorLabel.TextColor3 = DoorESP_Color
+		local dist = math.floor((myPos - normalDoor.Position).Magnitude)
+		StartDoorLabel.Text = "Door 100 [" .. dist .. "]"
+	end
+
+	-- ═══════════════════════════════════════════════════════════
+	-- ДИСПЕТЧЕР (Вызывает нужную функцию в зависимости от комнаты)
+	-- ═══════════════════════════════════════════════════════════
+    local function UpdateDoorTexts()
+        if not DoorESP_Enabled then return end
+        local pRoom = GetPlayerRoom()
+        if pRoom and pRoom ~= CurrentRoomModel then CurrentRoomModel = pRoom end
+        if not CurrentRoomModel then return end
+
+        local name = CurrentRoomModel.Name:lower()
+
+        -- ChaseStart / ChaseEnd / SearchlightsTramStart: дверей нет
+        if name == "chasestart" or name == "chaseend" or name == "searchlightstramstart" then
+            for _, data in pairs(DoorESP_Objects) do
+                if data.IsVisible ~= false then data.IsVisible = false FadeESP(data, false) end
+            end
+            if StartDoorHighlight then StartDoorHighlight.Enabled = false end
+            return
+        end
+
+        -- Для ВСЕХ остальных комнат (включая Start) используем новую пуленепробиваемую логику
+        if StartDoorHighlight then StartDoorHighlight.Enabled = false end
+        UpdateNormalDoorESP()
+    end
 
 	local function StopDoorESP()
 		if DoorESP_Conn then DoorESP_Conn:Disconnect() DoorESP_Conn = nil end
+		-- ═══ ПРЯЧЕМ ТЕКСТ СТАРТА ПРИ ВЫКЛЮЧЕНИИ ═══
+		if StartDoorBillboard then StartDoorBillboard.Enabled = false end
 	end
 
 	-- ═══ Screen Section ═══
@@ -1929,6 +2679,17 @@ end
 			else
 				DestroyKeybindGui()
 			end
+		end
+	})
+	
+		VisualsTab:Toggle({
+		Name = "CurRom",
+		Desc = "Показывает комнату, в которой ты находишься",
+		Flag = "CurRomUI",
+		Default = false,
+		Callback = function(value)
+			CurRomEnabled = value
+			if value then CreateCurRomGui() else DestroyCurRomGui() end
 		end
 	})
 
@@ -1957,8 +2718,10 @@ end
 	end)
 
 	task.spawn(function()
-		while task.wait(0.5) do
-			if DoorESP_Enabled then UpdateDoorTexts() end
+		while task.wait(0.1) do
+			if DoorESP_Enabled then 
+				pcall(UpdateDoorTexts) -- ═══ ВОТ ЭТА ЗАЩИТА ═══
+			end
 		end
 	end)
 
@@ -1979,12 +2742,12 @@ end
 	-- Точные фрагменты имён (lowercase)
 	local KEYCARD_KEYS = {"keycard"}
 	local NOTE_KEYS = {"passwordpaper", "password"}
-
+	
 	-- Что игнорить (чтобы не путать с другими предметами)
 	local IGNORE_KEYS = {
-		"currency", "drawer", "locker", "highlight", "door", "panel",
-		"cabinet", "shelf", "skip", "navipanel", "spawn", "itemlocker",
-		"catwalk", "room", "zone", "area", "hallway"   -- ← добавили
+		"currency", "drawer", "locker", "lockerunderwater", "highlight", "door", "panel", "cabinet", "shelf", 
+		"skip", "navipanel", "spawn", "itemlocker", "catwalk", "room", "zone", "area", "hallway",
+		"lever", "switch", "button", "generate", "generator", "valve", "computer", "screen", "terminal"
 	}
 
 	local function ContainsAny(str, list)
@@ -2040,19 +2803,33 @@ end
 		local p = prompt.Parent
 		local depth = 0
 		while p and p ~= workspace and depth < 6 do
-			local n = p.Name
-			-- Пропускаем игнор-имена
-			if not ContainsAny(n, IGNORE_KEYS) then
-				if ContainsAny(n, KEYCARD_KEYS) then 
-					-- ═══ Проверяем что это маленький предмет, а не зона ═══
-					if IsSmallItem(p) then
-						return "Keycard", p 
-					end
+			local n = p.Name:lower()
+			
+			-- ═══ Жесткий фильтр на мебель, растения и технику ═══
+			local isFurniture = n:find("table") or n:find("desk") or n:find("console") or n:find("panel") 
+			                 or n:find("monitor") or n:find("computer") or n:find("screen") or n:find("cabinet")
+			                 or n:find("plant") or n:find("pot") or n:find("flower") or n:find("tree") or n:find("bush")
+			                 or n:find("chair") or n:find("sofa") or n:find("couch") or n:find("drawer")
+			
+			if not isFurniture then
+				-- ═══ ФИКС: Карты (Keycard) ищем просто по имени, даже без цифрового экрана ═══
+				if ContainsAny(n, KEYCARD_KEYS) or n:find("card") or n:find("key") then 
+					return "Keycard", p 
 				end
-				if ContainsAny(n, NOTE_KEYS) then 
-					if IsSmallItem(p) then
-						return "Note", p 
+				
+				-- ═══ Бумаги (Note) все еще требуют наличия цифр, чтобы не ловить мусор ═══
+				if ContainsAny(n, NOTE_KEYS) or n:find("paper") or n:find("note") then 
+					local hasCodeUI = false
+					for _, d in ipairs(p:GetDescendants()) do
+						if d:IsA("SurfaceGui") or d:IsA("BillboardGui") then
+							local lbl = d:FindFirstChildWhichIsA("TextLabel", true)
+							if lbl and lbl.Text and lbl.Text:match("^%d+$") then
+								hasCodeUI = true
+								break
+							end
+						end
 					end
+					if hasCodeUI then return "Note", p end
 				end
 			end
 			p = p.Parent
@@ -2061,40 +2838,8 @@ end
 		return nil
 	end
 
-	local function GetKeyBounds(parts)
-		local minX, minY, minZ = math.huge, math.huge, math.huge
-		local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
-		for _, p in ipairs(parts) do
-			local cf, sz = p.CFrame, p.Size
-			for x = -1, 1, 2 do for y = -1, 1, 2 do for z = -1, 1, 2 do
-				local c = cf * Vector3.new(sz.X/2*x, sz.Y/2*y, sz.Z/2*z)
-				minX = math.min(minX, c.X); maxX = math.max(maxX, c.X)
-				minY = math.min(minY, c.Y); maxY = math.max(maxY, c.Y)
-				minZ = math.min(minZ, c.Z); maxZ = math.max(maxZ, c.Z)
-			end end end
-		end
-		local center = Vector3.new((minX+maxX)/2, (minY+maxY)/2, (minZ+maxZ)/2)
-		local size = Vector3.new(maxX-minX, maxY-minY, maxZ-minZ)
-		return CFrame.new(center), size
-	end
-
 	local function GetKeyUIContainer()
 		return LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
-	end
-
-	-- Собрать все части контейнера (для bounding box)
-	local function GetContainerParts(container)
-		local parts = {}
-		if container:IsA("BasePart") or container:IsA("MeshPart") then
-			table.insert(parts, container)
-		else
-			for _, d in ipairs(container:GetDescendants()) do
-				if d:IsA("BasePart") or d:IsA("MeshPart") then
-					table.insert(parts, d)
-				end
-			end
-		end
-		return parts
 	end
 
 	-- Читаем код с бумаги (часть "Code" содержит SurfaceGui с текстом)
@@ -2143,22 +2888,42 @@ end
 		return nil
 	end
 
-	-- Жёсткие размеры (studs) — подобраны под Pressure
-	local KEY_SIZES = {
-		["Keycard"] = Vector3.new(0.75, 0.60, 0.05),   -- ширина × высота × толщина
-		["Note"]    = Vector3.new(1.10, 1.75, 0.05),
-	}
-
 	local function CreateKeyESP(container, category, prompt)
 		if KeyESP_Objects[container] then return end
+
+		-- ═══ ФИКС: Увеличили лимит размеров, чтобы карты в ящиках не отсеивались ═══
+		local cf, sz
+		local ok, bcf, bsz = pcall(function() return container:GetBoundingBox() end)
+		if ok and bcf and bsz then
+			cf, sz = bcf, bsz
+		else
+			local minV = Vector3.new(math.huge, math.huge, math.huge)
+			local maxV = Vector3.new(-math.huge, -math.huge, -math.huge)
+			local has = false
+			for _, d in ipairs(container:GetDescendants()) do
+				if d:IsA("BasePart") then
+					has = true
+					local pos = d.Position
+					local half = d.Size / 2
+					minV = Vector3.new(math.min(minV.X, pos.X - half.X), math.min(minV.Y, pos.Y - half.Y), math.min(minV.Z, pos.Z - half.Z))
+					maxV = Vector3.new(math.max(maxV.X, pos.X + half.X), math.max(maxV.Y, pos.Y + half.Y), math.max(maxV.Z, pos.Z + half.Z))
+				end
+			end
+			if has then sz = maxV - minV end
+		end
+
+		-- Если объект слишком большой (больше 10 studs) - это мебель.
+		if sz and (sz.X > 10 or sz.Y > 10 or sz.Z > 10) then
+			return 
+		end
+		-- ═══════════════════════════════════════════════════════════
 
 		local container_ui = GetKeyUIContainer()
 
 		-- ═══ Highlight прямо на контейнер (Model или Part) ═══
-		-- Roblox сам рисует контур по всем видимым мешам внутри
 		local hl = Instance.new("Highlight")
 		hl.Name = "NL_KeyESP"
-		hl.Adornee = container          -- ← прямо модель/часть, без Box
+		hl.Adornee = container          
 		hl.FillColor = KeyESP_Color
 		hl.FillTransparency = 0.5
 		hl.OutlineColor = KeyESP_Color
@@ -2167,7 +2932,6 @@ end
 		hl.Parent = container_ui
 
 		-- ═══ Billboard на позицию карты/бумаги ═══
-		-- Берём позицию самой крупной видимой части (для центра текста)
 		local targetPart, targetVol = nil, 0
 		for _, d in ipairs(container:GetDescendants()) do
 			if (d:IsA("BasePart") or d:IsA("MeshPart"))
@@ -2197,7 +2961,7 @@ end
 
 		local bb = Instance.new("BillboardGui")
 		bb.Name = "NL_KeyESP_Billboard"
-		bb.Adornee = targetPart        -- ← на реальную часть
+		bb.Adornee = targetPart        
 		bb.Size = UDim2.new(0, 180, 0, bbHeight)
 		bb.StudsOffset = Vector3.new(0, 1.2, 0)
 		bb.AlwaysOnTop = true
@@ -2242,6 +3006,7 @@ end
 			AnchorPos = targetPart.Position,
 			Category = category,
 			Code = codeText,
+			IsVisible = true,
 		}
 	end
 
@@ -2284,21 +3049,42 @@ end
 		end
 	end
 
-	local function UpdateKeyTexts()
-		if not KeyESP_Enabled then return end
-		local char = LocalPlayer.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if not hrp then return end
-		local myPos = hrp.Position
-		for c, data in pairs(KeyESP_Objects) do
-			if not c.Parent then RemoveKeyESP(c) continue end
-			if data.AnchorPos and data.Label then
-				local dist = math.floor((myPos - data.AnchorPos).Magnitude)
-				local newText = data.Category .. " [" .. dist .. "]"
-				if data.Label.Text ~= newText then data.Label.Text = newText end
-			end
-		end
-	end
+    local function UpdateKeyTexts()
+        if not KeyESP_Enabled then return end
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local myPos = hrp.Position
+
+        local pRoom = GetPlayerRoom()
+        if pRoom and pRoom ~= CurrentRoomModel then CurrentRoomModel = pRoom end
+        if not CurrentRoomModel then return end
+
+        local name = CurrentRoomModel.Name
+        if name == "ChaseStart" or name == "ChaseEnd" or name == "SearchlightsTramStart" then
+            for _, data in pairs(KeyESP_Objects) do
+                if data.IsVisible ~= false then data.IsVisible = false FadeESP(data, false) end
+            end
+            return
+        end
+
+        for c, data in pairs(KeyESP_Objects) do
+            if not c.Parent then RemoveKeyESP(c) continue end
+            local targetPart = c:FindFirstChildWhichIsA("BasePart", true)
+            local pos = targetPart and targetPart.Position or c:GetPivot().Position
+            local dist = math.floor((myPos - pos).Magnitude)
+
+            local isVisible = c:IsDescendantOf(CurrentRoomModel)
+
+            if data.IsVisible ~= isVisible then
+                data.IsVisible = isVisible
+                FadeESP(data, isVisible)
+            end
+            if isVisible and data.Label then
+                local newText = data.Category .. " [" .. dist .. "]"
+                if data.Label.Text ~= newText then data.Label.Text = newText end
+            end
+        end
+    end
 
 	local function StartKeyESP()
 		ScanKeyItems()
@@ -2331,8 +3117,9 @@ end
 	end)
 
 	task.spawn(function()
-		while task.wait(0.5) do
-			if KeyESP_Enabled then UpdateKeyTexts() end
+		while task.wait(0.1) do
+			if DoorESP_Enabled then UpdateDoorTexts() end
+							pcall(UpdateDoorTexts)
 		end
 	end)
 
@@ -2443,6 +3230,7 @@ end
 			Billboard = bb,
 			Label = lbl,
 			AnchorPos = cf.Position,
+			IsVisible = true,
 		}
 	end
 
@@ -2484,21 +3272,51 @@ end
 		end
 	end
 
-	local function UpdateLockerTexts()
-		if not LockerESP_Enabled then return end
-		local char = LocalPlayer.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if not hrp then return end
-		local myPos = hrp.Position
-		for c, data in pairs(LockerESP_Objects) do
-			if not c.Parent then RemoveLockerESP(c) continue end
-			if data.AnchorPos and data.Label then
-				local dist = math.floor((myPos - data.AnchorPos).Magnitude)
-				local newText = "Locker [" .. dist .. "]"
-				if data.Label.Text ~= newText then data.Label.Text = newText end
-			end
-		end
-	end
+    local function UpdateLockerTexts()
+        if not LockerESP_Enabled then return end
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local myPos = hrp.Position
+
+        local pRoom = GetPlayerRoom()
+        if pRoom and pRoom ~= CurrentRoomModel then CurrentRoomModel = pRoom end
+        if not CurrentRoomModel then return end
+
+        -- ChaseStart: вырубаем
+        if CurrentRoomModel.Name == "ChaseStart" then
+            for _, data in pairs(LockerESP_Objects) do
+                if data.IsVisible ~= false then data.IsVisible = false FadeESP(data, false) end
+            end
+            return
+        end
+
+        -- ═══ ФИКС: Проверяем, включен ли режим серчлайта ═══
+        local isSearchlight = CurrentRoomModel.Name:find("Searchlights")
+
+        for c, data in pairs(LockerESP_Objects) do
+            if not c.Parent then RemoveLockerESP(c) continue end
+            local pos = c:GetPivot().Position
+            local dist = math.floor((myPos - pos).Magnitude)
+
+            local isVisible = false
+            if isSearchlight then
+                -- В комнате с прожекторами - только в радиусе 100
+                isVisible = dist < 100
+            else
+                -- В обычных комнатах - вся комната (старая логика)
+                isVisible = c:IsDescendantOf(CurrentRoomModel)
+            end
+
+            if data.IsVisible ~= isVisible then
+                data.IsVisible = isVisible
+                FadeESP(data, isVisible)
+            end
+            if isVisible and data.Label then
+                local newText = "Locker [" .. dist .. "]"
+                if data.Label.Text ~= newText then data.Label.Text = newText end
+            end
+        end
+    end
 
 	local function StartLockerESP()
 		ScanLockers()
@@ -2530,8 +3348,9 @@ end
 	end)
 
 	task.spawn(function()
-		while task.wait(0.5) do
-			if LockerESP_Enabled then UpdateLockerTexts() end
+		while task.wait(0.1) do
+			if DoorESP_Enabled then UpdateDoorTexts() end
+							pcall(UpdateDoorTexts)
 		end
 	end)
 
@@ -2636,6 +3455,7 @@ end
 			Billboard = bb,
 			Label = lbl,
 			AnchorPos = cf.Position,
+			IsVisible = true,
 		}
 	end
 
@@ -2669,28 +3489,52 @@ end
 		if not LeverESP_Enabled then return end
 		for _, obj in ipairs(workspace:GetDescendants()) do
 			if obj:IsA("Model") and MatchesLever(obj.Name) and HasPrompt(obj) then
-				if not LeverESP_Objects[obj] then
-					CreateLeverESP(obj)
+				-- ═══ ФИКС: Отсеиваем декоративные рычаги (у них нет ServerUse/ClientUse) ═══
+				if obj:GetAttribute("ServerUse") or obj:GetAttribute("ClientUse") then
+					if not LeverESP_Objects[obj] then
+						CreateLeverESP(obj)
+					end
 				end
 			end
 		end
 	end
 
-	local function UpdateLeverTexts()
-		if not LeverESP_Enabled then return end
-		local char = LocalPlayer.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		if not hrp then return end
-		local myPos = hrp.Position
-		for c, data in pairs(LeverESP_Objects) do
-			if not c.Parent then RemoveLeverESP(c) continue end
-			if data.AnchorPos and data.Label then
-				local dist = math.floor((myPos - data.AnchorPos).Magnitude)
-				local newText = "Lever [" .. dist .. "]"
-				if data.Label.Text ~= newText then data.Label.Text = newText end
-			end
-		end
-	end
+    local function UpdateLeverTexts()
+        if not LeverESP_Enabled then return end
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local myPos = hrp.Position
+
+        local pRoom = GetPlayerRoom()
+        if pRoom and pRoom ~= CurrentRoomModel then CurrentRoomModel = pRoom end
+        if not CurrentRoomModel then return end
+
+        local name = CurrentRoomModel.Name
+        if name == "ChaseStart" or name == "ChaseEnd" or name == "SearchlightsTramStart" then
+            for _, data in pairs(LeverESP_Objects) do
+                if data.IsVisible ~= false then data.IsVisible = false FadeESP(data, false) end
+            end
+            return
+        end
+
+        for c, data in pairs(LeverESP_Objects) do
+            if not c.Parent then RemoveLeverESP(c) continue end
+            local pos = c:GetPivot().Position
+            local dist = math.floor((myPos - pos).Magnitude)
+
+            -- ═══ ФИКС: Вместо привязки к комнате используем дистанцию (до 100 студов) ═══
+            local isVisible = dist < 100
+
+            if data.IsVisible ~= isVisible then
+                data.IsVisible = isVisible
+                FadeESP(data, isVisible)
+            end
+            if isVisible and data.Label then
+                local newText = "Lever [" .. dist .. "]"
+                if data.Label.Text ~= newText then data.Label.Text = newText end
+            end
+        end
+    end
 
 	local function StartLeverESP()
 		ScanLevers()
@@ -2698,8 +3542,11 @@ end
 			if not LeverESP_Enabled then return end
 			if obj:IsA("Model") and MatchesLever(obj.Name) then
 				task.wait(0.1)
-				if HasPrompt(obj) and not LeverESP_Objects[obj] then
-					CreateLeverESP(obj)
+				-- ═══ ФИКС: Проверяем атрибуты перед созданием ESP ═══
+				if HasPrompt(obj) and (obj:GetAttribute("ServerUse") or obj:GetAttribute("ClientUse")) then
+					if not LeverESP_Objects[obj] then
+						CreateLeverESP(obj)
+					end
 				end
 			end
 		end)
@@ -2721,8 +3568,9 @@ end
 	end)
 
 	task.spawn(function()
-		while task.wait(0.5) do
-			if LeverESP_Enabled then UpdateLeverTexts() end
+		while task.wait(0.1) do
+			if DoorESP_Enabled then UpdateDoorTexts() end
+							pcall(UpdateDoorTexts)
 		end
 	end)
 
@@ -2732,51 +3580,344 @@ end
 		ClearAllLeverESP()
 	end)
 	
--- ═══════════════════════════════════════════════════════════
--- ENTITY ESP v4 (Part + DescendantAdded, 100% рабочая)
--- ═══════════════════════════════════════════════════════════
-local EntityESP_Enabled = false
-local EntityESP_Color = Color3.fromRGB(255, 50, 50)
-local EntityESP_Objects = {}
-local EntityESP_Conn = nil
+	-- ═══════════════════════════════════════════════════════════
+	-- GENERATOR ESP (Table-based, идеальная проверка по свету)
+	-- ═══════════════════════════════════════════════════════════
+	local GenESP_Data = {
+		Enabled = false,
+		Color = Color3.fromRGB(255, 100, 50),
+		Objects = {},
+		Conn = nil
+	}
 
-local ALL_ENTITIES = {"Angler", "Blitz", "Chainsmoker", "Froger", "Pinkie", "Pandemonium"}
-local SelectedEntities = {}
-for _, name in ipairs(ALL_ENTITIES) do SelectedEntities[name] = true end
+	local GenESP_Utils = {}
+
+	GenESP_Utils.IsBroken = function(gen)
+		local success, result = pcall(function()
+			if not gen or not gen:IsA("Model") then return false end
+			
+			-- Ищем Fixed по всем потомкам (true)
+			local fixedVal = gen:FindFirstChild("Fixed", true)
+			if fixedVal and fixedVal:IsA("ValueBase") then
+				local val = tonumber(fixedVal.Value)
+				if val then
+					return val < 100 -- Если меньше 100 (например 0), значит сломан
+				end
+			end
+			
+			-- Запасной вариант: проверяем кнопку
+			local prompt = gen:FindFirstChildWhichIsA("ProximityPrompt", true)
+			if prompt then
+				return prompt.Enabled
+			end
+			
+			return false
+		end)
+		return success and result
+	end
+
+	GenESP_Utils.Create = function(container)
+		if GenESP_Data.Objects[container] then return end
+
+		local container_ui = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
+
+		local targetModel = container:FindFirstChild("Model") or container
+		local targetPart = nil
+		local maxVol = 0
+		for _, d in ipairs(targetModel:GetDescendants()) do
+			if d:IsA("BasePart") and d.Transparency < 0.9 then
+				local vol = d.Size.X * d.Size.Y * d.Size.Z
+				if vol > maxVol then
+					maxVol = vol
+					targetPart = d
+				end
+			end
+		end
+		
+		if not targetPart then
+			targetPart = targetModel:FindFirstChildWhichIsA("BasePart", true) or container
+		end
+
+		local hl = Instance.new("Highlight")
+		hl.Name = "NL_GenESP"
+		hl.Adornee = targetModel
+		hl.FillColor = GenESP_Data.Color
+		hl.FillTransparency = 0.5
+		hl.OutlineColor = GenESP_Data.Color
+		hl.OutlineTransparency = 0
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = container_ui
+
+		local bb = Instance.new("BillboardGui")
+		bb.Name = "NL_GenESP_Billboard"
+		bb.Adornee = targetPart
+		bb.Size = UDim2.new(0, 140, 0, 40) -- Увеличили высоту под 2 строки
+		bb.StudsOffsetWorldSpace = Vector3.new(0, (targetPart.Size.Y / 2) + 1.5, 0)
+		bb.AlwaysOnTop = true
+		bb.MaxDistance = 500
+		bb.LightInfluence = 0
+		bb.Parent = container_ui
+
+		local lbl = Instance.new("TextLabel")
+		lbl.Size = UDim2.new(1, 0, 0, 20)
+		lbl.Position = UDim2.new(0, 0, 0, 0)
+		lbl.BackgroundTransparency = 1
+		lbl.Text = "Generator [0]"
+		lbl.TextColor3 = GenESP_Data.Color
+		lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+		lbl.TextStrokeTransparency = 0
+		lbl.TextSize = 14
+		lbl.Font = Enum.Font.GothamBold
+		lbl.Parent = bb
+
+		-- ═══ НОВЫЙ ТЕКСТ: Показывает проценты ═══
+		local statusLbl = Instance.new("TextLabel")
+		statusLbl.Size = UDim2.new(1, 0, 0, 20)
+		statusLbl.Position = UDim2.new(0, 0, 0, 20)
+		statusLbl.BackgroundTransparency = 1
+		statusLbl.Text = "Fixed: 0%"
+		statusLbl.TextColor3 = Color3.fromRGB(255, 80, 80) -- Красный по умолчанию
+		statusLbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+		statusLbl.TextStrokeTransparency = 0
+		statusLbl.TextSize = 12
+		statusLbl.Font = Enum.Font.Gotham
+		statusLbl.Parent = bb
+
+		GenESP_Data.Objects[container] = {
+			Highlight = hl,
+			Billboard = bb,
+			Label = lbl,
+			StatusLabel = statusLbl, -- Сохраняем для обновления
+			AnchorPos = targetPart.Position,
+			IsVisible = true,
+		}
+	end
+
+	GenESP_Utils.Remove = function(container)
+		local data = GenESP_Data.Objects[container]
+		if not data then return end
+		pcall(function() if data.Highlight then data.Highlight:Destroy() end end)
+		pcall(function() if data.Billboard then data.Billboard:Destroy() end end)
+		GenESP_Data.Objects[container] = nil
+	end
+
+	GenESP_Utils.ClearAll = function()
+		for c in pairs(GenESP_Data.Objects) do GenESP_Utils.Remove(c) end
+		GenESP_Data.Objects = {}
+		pcall(function()
+			local roots = {LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui")}
+			for _, root in ipairs(roots) do
+				if root then
+					for _, obj in ipairs(root:GetDescendants()) do
+						local n = obj.Name
+						if n == "NL_GenESP_Billboard" or n == "NL_GenESP" then
+							obj:Destroy()
+						end
+					end
+				end
+			end
+		end)
+	end
+
+	GenESP_Utils.Scan = function()
+		if not GenESP_Data.Enabled then return end
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if obj:IsA("Model") and obj.Name:lower():find("generator") then
+				if GenESP_Utils.IsBroken(obj) and not GenESP_Data.Objects[obj] then
+					GenESP_Utils.Create(obj)
+				end
+			end
+		end
+	end
+
+	GenESP_Utils.UpdateTexts = function()
+		if not GenESP_Data.Enabled then return end
+		local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		local myPos = hrp.Position
+
+		local pRoom = GetPlayerRoom()
+		if pRoom then CurrentRoomModel = pRoom end
+
+		-- Увеличил дистанцию, чтобы не пропадали
+		local maxDist = 200
+		if CurrentRoomModel and CurrentRoomModel.Name:find("Searchlights") then
+			maxDist = 150
+		end
+
+		for c, data in pairs(GenESP_Data.Objects) do
+			if not c.Parent then GenESP_Utils.Remove(c) continue end
+			
+			-- Если 100%, удаляем
+			if not GenESP_Utils.IsBroken(c) then 
+				GenESP_Utils.Remove(c) 
+				continue 
+			end
+
+			local pos = c:GetPivot().Position
+			local dist = math.floor((myPos - pos).Magnitude)
+			
+			local isVisible = dist <= maxDist
+
+			if data.IsVisible ~= isVisible then
+				data.IsVisible = isVisible
+				FadeESP(data, isVisible)
+			end
+			
+			if isVisible then
+				if data.Label then
+					local newText = "Generator [" .. dist .. "]"
+					if data.Label.Text ~= newText then data.Label.Text = newText end
+				end
+				
+				-- ═══ ОБНОВЛЯЕМ ПРОЦЕНТЫ ═══
+				if data.StatusLabel then
+					local fixedVal = c:FindFirstChild("Fixed", true)
+					local fixedNum = 0
+					if fixedVal and fixedVal:IsA("ValueBase") then
+						fixedNum = tonumber(fixedVal.Value) or 0
+					end
+					
+					local statusText = "Fixed: " .. fixedNum .. "%"
+					if data.StatusLabel.Text ~= statusText then
+						data.StatusLabel.Text = statusText
+						-- Красим в зависимости от прогресса
+						if fixedNum >= 100 then
+							data.StatusLabel.TextColor3 = Color3.fromRGB(80, 255, 120) -- Зеленый
+						elseif fixedNum > 0 then
+							data.StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 80) -- Желтый
+						else
+							data.StatusLabel.TextColor3 = Color3.fromRGB(255, 80, 80) -- Красный
+						end
+					end
+				end
+			end
+		end
+	end
+
+	GenESP_Utils.Start = function()
+		GenESP_Utils.Scan()
+		GenESP_Data.Conn = workspace.DescendantAdded:Connect(function(obj)
+			if not GenESP_Data.Enabled then return end
+			if obj:IsA("Model") and obj.Name:lower():find("generator") then
+				task.wait(0.1)
+				if GenESP_Utils.IsBroken(obj) and not GenESP_Data.Objects[obj] then
+					GenESP_Utils.Create(obj)
+				end
+			end
+		end)
+		
+		-- Каждую секунду делаем пере-скан, чтобы точно ничего не пропустить
+		task.spawn(function()
+			while GenESP_Data.Enabled do
+				task.wait(1)
+				GenESP_Utils.Scan()
+			end
+		end)
+	end
+
+	GenESP_Utils.Stop = function()
+		if GenESP_Data.Conn then GenESP_Data.Conn:Disconnect() GenESP_Data.Conn = nil end
+	end
+
+	MakeESP("Generator ESP", "Подсвечивает сломанные генераторы", Color3.fromRGB(255, 100, 50), "GenESP", "GenESPColor", function(value)
+		GenESP_Data.Enabled = value
+		if value then GenESP_Utils.Start() else GenESP_Utils.Stop() GenESP_Utils.ClearAll() end
+	end, function(color)
+		GenESP_Data.Color = color
+		for _, data in pairs(GenESP_Data.Objects) do
+			pcall(function() data.Highlight.FillColor = color data.Highlight.OutlineColor = color end)
+			pcall(function() data.Label.TextColor3 = color end)
+		end
+	end)
+
+	RegisterCleanup("GenESP", function()
+		GenESP_Data.Enabled = false
+		GenESP_Utils.Stop()
+		GenESP_Utils.ClearAll()
+	end)
+
+	-- ═══════════════════════════════════════════════════════════
+	-- УВЕДОМЛЕНИЯ (Только Airflow)
+	-- ═══════════════════════════════════════════════════════════
+	NotificationSound = Instance.new("Sound")
+	NotificationSound.SoundId = "rbxassetid://4590662766"
+	NotificationSound.Volume = 5
+	NotificationSound.Parent = game:GetService("SoundService")
+
+	function ShowNotify(title, content, notifyType, duration)
+		-- Играем звук
+		pcall(function() 
+			NotificationSound:Stop()
+			NotificationSound:Play() 
+		end)
+
+		-- Вызываем встроенный нотификатор Airflow
+		pcall(function()
+			Window:Notify({
+				Title = title,
+				Content = content,
+				Type = notifyType or "Info",
+				Duration = duration or 5
+			})
+		end)
+	end
+	
+-- ═══════════════════════════════════════════════════════════
+-- ENTITY ESP v5 (Table-based + Fix Register Limit)
+-- ═══════════════════════════════════════════════════════════
+local EntityESP_Data = {
+    Enabled = false,
+    Color = Color3.fromRGB(255, 50, 50),
+    Objects = {},
+    Conn = nil,
+    NotifyEnabled = false,
+    NotifiedEntities = {},
+    ALL_ENTITIES = {"Angler", "Blitz", "Chainsmoker", "Froger", "Pinkie", "Pandemonium"},
+    SelectedEntities = {}
+}
+
+for _, name in ipairs(EntityESP_Data.ALL_ENTITIES) do 
+    EntityESP_Data.SelectedEntities[name] = true 
+end
 
 -- Проверка имени
-local function MatchEntity(name)
+-- ═══ ОБЪЕДИНЯЕМ ФУНКЦИИ В ТАБЛИЦУ (Фикс лимита регистров) ═══
+local EntityUtils = {}
+
+EntityUtils.MatchEntity = function(name)
     local n = name:lower()
-    for entityName, isSelected in pairs(SelectedEntities) do
-        if isSelected and n == entityName:lower() then -- ТОЧНОЕ СОВПАДЕНИЕ, как в игре
-            return true, entityName
+    for entityName, isSelected in pairs(EntityESP_Data.SelectedEntities) do
+        if isSelected then
+            -- ═══ ФИКС: Ищем совпадение по подстроке (RidgeAngler сработает как Angler) ═══
+            if n:find(entityName:lower(), 1, true) then
+                return true, entityName
+            end
         end
     end
     return false, nil
 end
 
-local function CreateEntityESP(container, entityName)
-    if EntityESP_Objects[container] then return end
+EntityUtils.Create = function(container, entityName)
+    if EntityESP_Data.Objects[container] then return end
     
     local container_ui = LocalPlayer:FindFirstChild("PlayerGui") or game:GetService("CoreGui")
 
-    -- ═══ 1. Highlight (для случаев если меши есть — EX15-подобные) ═══
     local hl = Instance.new("Highlight")
     hl.Name = "NL_EntityESP"
     hl.Adornee = container
-    hl.FillColor = EntityESP_Color
+    hl.FillColor = EntityESP_Data.Color
     hl.FillTransparency = 0.85
-    hl.OutlineColor = EntityESP_Color
+    hl.OutlineColor = EntityESP_Data.Color
     hl.OutlineTransparency = 0
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     hl.Parent = container_ui
 
-    -- ═══ 2. КРУГ через BillboardGui ═══
     local bbCircle = Instance.new("BillboardGui")
     bbCircle.Name = "NL_EntityESP_Circle"
     bbCircle.Adornee = container
-    bbCircle.Size = UDim2.new(16, 0, 16, 0) -- ← БЫЛО 8, 0, 8, 0 (стало в 2 раза больше)
-    bbCircle.StudsOffsetWorldSpace = Vector3.new(0, 5, 0) -- ← ДОБАВЬ ЭТУ СТРОКУ (поднимает круг на 5 студов вверх)
+    bbCircle.Size = UDim2.new(16, 0, 16, 0)
+    bbCircle.StudsOffsetWorldSpace = Vector3.new(0, 5, 0)
     bbCircle.AlwaysOnTop = true
     bbCircle.MaxDistance = 800
     bbCircle.LightInfluence = 0
@@ -2787,7 +3928,7 @@ local function CreateEntityESP(container, entityName)
     circle.AnchorPoint = Vector2.new(0.5, 0.5)
     circle.Position = UDim2.new(0.5, 0, 0.5, 0)
     circle.Size = UDim2.new(0.8, 0, 0.8, 0)
-    circle.BackgroundColor3 = EntityESP_Color
+    circle.BackgroundColor3 = EntityESP_Data.Color
     circle.BackgroundTransparency = 0.85
     circle.BorderSizePixel = 0
     circle.Parent = bbCircle
@@ -2797,18 +3938,17 @@ local function CreateEntityESP(container, entityName)
     corner.Parent = circle
 
     local stroke = Instance.new("UIStroke")
-    stroke.Color = EntityESP_Color
+    stroke.Color = EntityESP_Data.Color
     stroke.Thickness = 3
     stroke.Transparency = 0
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     stroke.Parent = circle
 
-    -- ═══ 3. Текст ═══
     local bbText = Instance.new("BillboardGui")
     bbText.Name = "NL_EntityESP_Billboard"
     bbText.Adornee = container
     bbText.Size = UDim2.new(0, 200, 0, 24)
-    bbText.StudsOffsetWorldSpace = Vector3.new(0, 10, 0) -- ← БЫЛО 4, стало 10 (текст над кругом)
+    bbText.StudsOffsetWorldSpace = Vector3.new(0, 10, 0)
     bbText.AlwaysOnTop = true
     bbText.MaxDistance = 1000
     bbText.LightInfluence = 0
@@ -2818,14 +3958,14 @@ local function CreateEntityESP(container, entityName)
     lbl.Size = UDim2.new(1, 0, 1, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = entityName .. " [0]"
-    lbl.TextColor3 = EntityESP_Color
+    lbl.TextColor3 = EntityESP_Data.Color
     lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
     lbl.TextStrokeTransparency = 0
     lbl.TextSize = 16
     lbl.Font = Enum.Font.GothamBold
     lbl.Parent = bbText
 
-    EntityESP_Objects[container] = {
+    EntityESP_Data.Objects[container] = {
         Highlight = hl,
         Circle = bbCircle,
         CircleFrame = circle,
@@ -2837,18 +3977,18 @@ local function CreateEntityESP(container, entityName)
     }
 end
 
-local function RemoveEntityESP(container)
-    local data = EntityESP_Objects[container]
+EntityUtils.Remove = function(container)
+    local data = EntityESP_Data.Objects[container]
     if not data then return end
     pcall(function() if data.Highlight then data.Highlight:Destroy() end end)
     pcall(function() if data.Circle then data.Circle:Destroy() end end)
     pcall(function() if data.Billboard then data.Billboard:Destroy() end end)
-    EntityESP_Objects[container] = nil
+    EntityESP_Data.Objects[container] = nil
 end
 
-local function ClearAllEntityESP()
-    for c in pairs(EntityESP_Objects) do RemoveEntityESP(c) end
-    EntityESP_Objects = {}
+EntityUtils.ClearAll = function()
+    for c in pairs(EntityESP_Data.Objects) do EntityUtils.Remove(c) end
+    EntityESP_Data.Objects = {}
     pcall(function()
         local roots = {LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui")}
         for _, root in ipairs(roots) do
@@ -2861,33 +4001,72 @@ local function ClearAllEntityESP()
     end)
 end
 
--- ═══ Скан (Model или Part) ═══
-local function ScanEntities()
-    if not EntityESP_Enabled then return end
-    for _, obj in ipairs(workspace:GetChildren()) do
+EntityUtils.Scan = function()
+    if not EntityESP_Data.Enabled and not EntityESP_Data.NotifyEnabled then return end
+    
+    local charactersFolder = workspace:FindFirstChild("GameplayFolder") and workspace.GameplayFolder:FindFirstChild("Characters")
+    
+    local function checkObj(obj)
         if obj:IsA("Model") or obj:IsA("BasePart") then
-            local isSelected, matchedName = MatchEntity(obj.Name)
+            local isSelected, matchedName = EntityUtils.MatchEntity(obj.Name)
+            
             if isSelected then
-                if not EntityESP_Objects[obj] then
-                    CreateEntityESP(obj, matchedName)
-                    --print("[EntityESP] ✅ Найден:", matchedName)
+                if EntityESP_Data.Enabled then
+                    if not EntityESP_Data.Objects[obj] then
+                        EntityUtils.Create(obj, matchedName)
+                    end
                 end
-            elseif EntityESP_Objects[obj] then
-                RemoveEntityESP(obj)
+
+                if EntityESP_Data.NotifyEnabled then
+                    if not EntityESP_Data.NotifiedEntities[obj] then
+                        EntityESP_Data.NotifiedEntities[obj] = true
+                        
+                        local now = tick()
+                        if not EntityESP_Data.LastNotifyTime or (now - EntityESP_Data.LastNotifyTime) > 1.5 then
+                            EntityESP_Data.LastNotifyTime = now
+                            task.spawn(function() 
+                                task.wait(0.05)
+                                ShowNotify("Synapse", "Сущность " .. tostring(matchedName) .. " заспавнился", "Info", 5) 
+                            end)
+                        end
+                    end
+                end
             end
+        end
+    end
+    
+    -- Сканируем Characters
+    if charactersFolder then
+        for _, obj in ipairs(charactersFolder:GetDescendants()) do
+            checkObj(obj)
+        end
+    end
+    
+    -- ═══ ФИКС: Сканируем прямых детей Workspace (там спавнится RidgeAngler) ═══
+    for _, obj in ipairs(workspace:GetChildren()) do
+        checkObj(obj)
+    end
+    
+    -- Очистка мертвых объектов
+    for obj in pairs(EntityESP_Data.NotifiedEntities) do
+        if not obj.Parent then 
+            EntityESP_Data.NotifiedEntities[obj] = nil 
         end
     end
 end
 
-local function UpdateEntityTexts()
-    if not EntityESP_Enabled then return end
+EntityUtils.UpdateTexts = function()
+    if not EntityESP_Data.Enabled then return end
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     local myPos = hrp.Position
     
-    for c, data in pairs(EntityESP_Objects) do
-        if not c.Parent then RemoveEntityESP(c) continue end
+    for c, data in pairs(EntityESP_Data.Objects) do
+        if not c.Parent then 
+            EntityUtils.Remove(c) 
+            continue 
+        end
         if data.Label then
             local dist = math.floor((myPos - data.Anchor.Position).Magnitude)
             local newText = data.EntityName .. " [" .. dist .. "]"
@@ -2896,72 +4075,110 @@ local function UpdateEntityTexts()
     end
 end
 
--- ═══ Ловим через DescendantAdded ═══
-local function StartEntityESP()
-    ScanEntities()
-    EntityESP_Conn = workspace.DescendantAdded:Connect(function(obj)
-        if not EntityESP_Enabled then return end
+EntityUtils.Start = function()
+    EntityUtils.Scan()
+    EntityESP_Data.Conn = workspace.DescendantAdded:Connect(function(obj)
+        if not EntityESP_Data.Enabled and not EntityESP_Data.NotifyEnabled then return end
         if obj:IsA("Model") or obj:IsA("BasePart") then
-            -- Проверяем родителя или самого объекта
-            local isSelected, matchedName = MatchEntity(obj.Name)
-            if isSelected and not EntityESP_Objects[obj] then
-                -- Ждём 0.1 сек чтобы модель/парт прогрузились
+            local isSelected = EntityUtils.MatchEntity(obj.Name)
+            if isSelected then
                 task.wait(0.1)
                 if obj.Parent then
-                    CreateEntityESP(obj, matchedName)
-                    --print("[EntityESP] 🔥 Заспавнен:", matchedName)
+                    EntityUtils.Scan()
                 end
             end
         end
     end)
 end
 
-local function StopEntityESP()
-    if EntityESP_Conn then EntityESP_Conn:Disconnect() EntityESP_Conn = nil end
+EntityUtils.Stop = function()
+    if EntityESP_Data.Conn then 
+        EntityESP_Data.Conn:Disconnect() 
+        EntityESP_Data.Conn = nil 
+    end
 end
 
 -- ═══ ТОГГЛ ═══
-	MakeESP("Entity ESP", "Подсвечивает монстров", Color3.fromRGB(255, 50, 50), "EntityESP", "EntityESPColor", function(value)
-		EntityESP_Enabled = value
-		if value then StartEntityESP() else StopEntityESP() ClearAllEntityESP() end
-	end, function(color)
-		EntityESP_Color = color
-		for _, data in pairs(EntityESP_Objects) do
-			pcall(function() if data.Highlight then data.Highlight.FillColor = color data.Highlight.OutlineColor = color end end)
-			pcall(function() if data.CircleFrame then data.CircleFrame.BackgroundColor3 = color end end)
-			pcall(function() if data.Stroke then data.Stroke.Color = color end end)
-			pcall(function() if data.Label then data.Label.TextColor3 = color end end)
-		end
-	end)
+MakeESP("Entity ESP", "Подсвечивает монстров", Color3.fromRGB(255, 50, 50), "EntityESP", "EntityESPColor", function(value)
+    EntityESP_Data.Enabled = value
+    if value then 
+        EntityESP_Data.NotifiedEntities = {}
+        EntityUtils.Start() 
+    else 
+        EntityUtils.Stop() 
+        EntityUtils.ClearAll() 
+    end
+end, function(color)
+    EntityESP_Data.Color = color
+    for _, data in pairs(EntityESP_Data.Objects) do
+        pcall(function() if data.Highlight then data.Highlight.FillColor = color data.Highlight.OutlineColor = color end end)
+        pcall(function() if data.CircleFrame then data.CircleFrame.BackgroundColor3 = color end end)
+        pcall(function() if data.Stroke then data.Stroke.Color = color end end)
+        pcall(function() if data.Label then data.Label.TextColor3 = color end end)
+    end
+end)
+
+-- ═══ NOTIFY ENTITY ═══
+VisualsTab:Toggle({
+    Name = "Notify Entity",
+    Desc = "Уведомляет о появлении монстров",
+    Default = false,
+    Flag = "NotifyEntity",
+    Callback = function(value)
+        EntityESP_Data.NotifyEnabled = value
+    end
+})
 
 -- ═══ ФИЛЬТР ═══
 VisualsTab:Dropdown({
     Name = "Entity Filter",
-    Desc = "Выбери, кого подсвечивать",
-    Options = ALL_ENTITIES,
-    Default = ALL_ENTITIES,
+    Desc = "Cписок сущностей",
+    Options = EntityESP_Data.ALL_ENTITIES,
+    Default = EntityESP_Data.ALL_ENTITIES,
     Multi = true,
     Callback = function(selectedList)
-        for name in pairs(SelectedEntities) do SelectedEntities[name] = false end
-        for _, name in ipairs(selectedList) do SelectedEntities[name] = true end
-        if EntityESP_Enabled then ScanEntities() end
+        for name in pairs(EntityESP_Data.SelectedEntities) do EntityESP_Data.SelectedEntities[name] = false end
+        for _, name in ipairs(selectedList) do EntityESP_Data.SelectedEntities[name] = true end
+        if EntityESP_Data.Enabled then EntityUtils.Scan() end
     end
 })
 
+-- ═══ ЕДИНЫЙ ЦИКЛ ОБНОВЛЕНИЯ ═══
 task.spawn(function()
     while task.wait(0.3) do
-        if EntityESP_Enabled then 
-            ScanEntities() 
-            UpdateEntityTexts() 
+        if EntityESP_Data.Enabled or EntityESP_Data.NotifyEnabled then 
+            EntityUtils.Scan() 
+            if EntityESP_Data.Enabled then EntityUtils.UpdateTexts() end
         end
     end
 end)
 
 RegisterCleanup("EntityESP", function()
-    EntityESP_Enabled = false
-    StopEntityESP()
-    ClearAllEntityESP()
+    EntityESP_Data.Enabled = false
+    EntityUtils.Stop()
+    EntityUtils.ClearAll()
 end)
+
+    task.spawn(function()
+        while task.wait(0.1) do
+            if DoorESP_Enabled   then pcall(UpdateDoorTexts)   end
+            if LockerESP_Enabled then pcall(UpdateLockerTexts) end
+            if KeyESP_Enabled    then pcall(UpdateKeyTexts)    end
+            if LeverESP_Enabled  then pcall(UpdateLeverTexts)  end
+            if GenESP_Data.Enabled then pcall(GenESP_Utils.UpdateTexts) end
+            if CurRomEnabled and CurRomLabel then
+                UpdateCurrentRoom()
+                
+                if LastRoomName and LastRoomName:lower() == "start" then
+                    CurRomLabel.Text = "Start (101)"
+                elseif CurrentRoomNum == -999 then -- ═══ ФИКС: -999 вместо 0 ═══
+                    CurRomLabel.Text = LastRoomName .. " (nil)"
+                else
+                    CurRomLabel.Text = LastRoomName .. " (" .. tostring(CurrentRoomNum) .. ")"
+                end
+            end
+        end
+    end)
 
 	
 	end
@@ -2976,77 +4193,73 @@ end)
 		Desc = "Выгрузить скрипт",
 		Icon = "lucide:power",
 		Style = "Danger",
-	Callback = function()
-		_G.SynapseUnloaded = true
-		--print("[Synapse] === UNLOAD START ===")
-		
-		-- ═══ ФОРС-СБРОС JUMP (до всего) ═══
-		AllowJumpEnabled = false
-		InfinityJumpEnabled = false
-		SitGuard = false
-		if JumpConn then JumpConn:Disconnect() JumpConn = nil end
-		if SitBlockConn then SitBlockConn:Disconnect() SitBlockConn = nil end
-		if SitHeartbeatConn then SitHeartbeatConn:Disconnect() SitHeartbeatConn = nil end
-		if SitChangedConn then SitChangedConn:Disconnect() SitChangedConn = nil end
-		if SeatedConn then SeatedConn:Disconnect() SeatedConn = nil end
-		
-		-- ═══ Снимаем только наш Sit, НЕ трогаем Jumping ═══
-		pcall(function()
-			local char = LocalPlayer.Character
-			local hum = char and char:FindFirstChildOfClass("Humanoid")
-			if hum then
-				if hum.Sit then hum.Sit = false end
-				-- НЕ восстанавливаем Jumping / Seated — Pressure сам
-			end
-		end)
-		
-		-- ═══ Останавливаем polling keybind list ═══
-		_G.SynapseUnloaded = true
-		
-		-- ═══ Обычный cleanup ═══
-		pcall(RunAllCleanups)
-		
-		-- ═══ Сбрасываем мышь ═══
-		pcall(function()
-			if _G.NL_MouseUnlockConn then
-				_G.NL_MouseUnlockConn:Disconnect()
-				_G.NL_MouseUnlockConn = nil
-			end
-			UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-			UserInputService.MouseIconEnabled = false
-		end)
-		
-		-- ═══ Сбрасываем камеру ═══
-		pcall(function()
-			local cam = workspace.CurrentCamera
-			if cam then
-				cam.CameraType = Enum.CameraType.Custom
-				if LocalPlayer.Character then
-					local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-					if hum then cam.CameraSubject = hum end
+		Callback = function()
+			_G.SynapseUnloaded = true
+			
+			-- ═══ ФОРС-СБРОС JUMP ═══
+			AllowJumpEnabled = false
+			InfinityJumpEnabled = false
+			SitGuard = false
+			if JumpConn then JumpConn:Disconnect() JumpConn = nil end
+			if SitBlockConn then SitBlockConn:Disconnect() SitBlockConn = nil end
+			if SitHeartbeatConn then SitHeartbeatConn:Disconnect() SitHeartbeatConn = nil end
+			if SitChangedConn then SitChangedConn:Disconnect() SitChangedConn = nil end
+			if SeatedConn then SeatedConn:Disconnect() SeatedConn = nil end
+			
+			pcall(function()
+				local char = LocalPlayer.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Sit then hum.Sit = false end
+			end)
+			
+			-- ═══ Обычный cleanup ═══
+			pcall(RunAllCleanups)
+			
+			-- ═══ Сбрасываем мышь ═══
+			pcall(function()
+				if _G.NL_MouseUnlockConn then
+					_G.NL_MouseUnlockConn:Disconnect()
+					_G.NL_MouseUnlockConn = nil
 				end
-			end
-		end)
-		
-		-- ═══ Уничтожаем UI ═══
-		pcall(function()
-			if Window and Window.Destroy then
-				Window:Destroy()
-			end
-		end)
-		
-		-- ═══ Финальная очистка ═══
-		pcall(function()
-			local root = gethui and gethui() or game:GetService("CoreGui")
-			for _, gui in ipairs(root:GetChildren()) do
-				if gui:IsA("ScreenGui") and (gui.Name == "AirflowUI" or gui.Name == "Synapse") then
-					gui:Destroy()
+				UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+				UserInputService.MouseIconEnabled = false
+			end)
+			
+			-- ═══ Сбрасываем камеру ═══
+			pcall(function()
+				local cam = workspace.CurrentCamera
+				if cam then
+					cam.CameraType = Enum.CameraType.Custom
+					if LocalPlayer.Character then
+						local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+						if hum then cam.CameraSubject = hum end
+					end
 				end
-			end
-		end)
-		
-		--print("[Synapse] === UNLOAD COMPLETE ===")
-	end
+			end)
+			
+			-- ═══ Уничтожаем UI ═══
+			pcall(function()
+				if Window and Window.Destroy then
+					Window:Destroy()
+				end
+			end)
+			
+			-- ═══ ТОТАЛЬНАЯ ЗАЧИСТКА ВСЕХ ИНТЕРФЕЙСОВ ═══
+			pcall(function()
+				local roots = {gethui and gethui() or game:GetService("CoreGui"), LocalPlayer:FindFirstChild("PlayerGui")}
+				for _, root in ipairs(roots) do
+					if root then
+						for _, gui in ipairs(root:GetChildren()) do
+							if gui:IsA("ScreenGui") then
+								if gui.Name:find("Synapse") or gui.Name:find("Airflow") or gui.Name:find("NL_") then
+									gui:Destroy()
+								end
+							end
+						end
+					end
+				end
+			end)
+		end,
 	})
 
 	-- ═══════════════════════════════════════════════════════════
@@ -3480,5 +4693,5 @@ end
 			Window:Notify({Title = "Auto Load", Content = "Загружен: " .. name, Type = "Success", Duration = 4})
 		end)
 	end)
-
+	
 	print("FROV")
